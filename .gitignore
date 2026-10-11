@@ -38,3 +38,6 @@ dist-ssr
 .vite
 server/node_modules
 server/.env
+
+# Documentație locală (handover, PDF-uri) — nu se urcă pe GitHub
+DOCS/

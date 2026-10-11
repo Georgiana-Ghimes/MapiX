@@ -48,6 +48,15 @@ npm run db:seed
 
 Implicit: `admin@mapix.local` / `admin12345`
 
+Import date research (xlsx în `data/research/` — până avem DB partajat):
+
+```bash
+npm run db:import-safe    # doar confirmate din act
+npm run db:import-queue   # restul → coada „Verificări necesare”
+```
+
+Detalii: [`data/research/README.md`](./data/research/README.md).
+
 La înregistrare, codul OTP este afișat în consola serverului.
 
 ## Scripts

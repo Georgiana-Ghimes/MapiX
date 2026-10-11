@@ -20,4 +20,4 @@ Start with `README.md` for local setup, environment variables, and run commands.
 - Prefer the existing entity API surface in `src/api/client.js` before adding ad-hoc fetch helpers.
 - Schema changes go through `server/src/migrate.js`.
 - Run the relevant checks from `package.json` before finishing code changes.
-- App version/build live in root `package.json` (`version` + `build`) and show on login + sidebar. On **commit and push**, bump them per `.cursor/rules/semver-commit-push.mdc`.
+- App version/build live in root `package.json` (`version` + `build`; sync `version` in `server/package.json`) and show on login + sidebar as `vX.Y.Z · build N`. **Before every meaningful commit**, bump per `.cursor/rules/semver-commit-push.mdc` (PATCH/MINOR/MAJOR + build always +1).

@@ -31,69 +31,98 @@ import { useAuth } from '@/lib/AuthContext';
 import { dataRo, numarRo } from '@/lib/format';
 import { PRIORITATI, STATUSURI_ACOPERIRE, STATUS_REGLEMENTARE } from '@/lib/enum';
 
-const FILTRE_GOL = { cautare: '', prioritate: 'toate', judet: 'toate', status_reglementare: 'toate', status_acoperire: 'toate', arhivate: false };
+const FILTRE_GOL = {
+  cautare: '',
+  prioritate: 'toate',
+  judet: 'toate',
+  status_reglementare: 'toate',
+  status_acoperire: 'toate',
+  arhivate: false,
+};
 
 export default function Localitati() {
   const { toast } = useToast();
   const { user } = useAuth();
   const esteAdmin = user?.role === 'admin';
   const [lista, setLista] = useState([]);
+  const [toatePentruJudete, setToatePentruJudete] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [areMaiMulte, setAreMaiMulte] = useState(false);
-  const [seIncarca, setSeIncarca] = useState(true);
+  const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
+  const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [seIncarcaMaiMulte, setSeIncarcaMaiMulte] = useState(false);
   const [eroare, setEroare] = useState(null);
   const [filtre, setFiltre] = useState(FILTRE_GOL);
+  const [cautareDebounced, setCautareDebounced] = useState('');
   const [numarReguli, setNumarReguli] = useState({});
   const [numarZone, setNumarZone] = useState({});
   const [dialog, setDialog] = useState({ tip: null, item: null, localitateId: null });
   const [deArhivat, setDeArhivat] = useState(null);
 
-  const construiesteQuery = useCallback(() => {
+  // Debounce text search so typing doesn't remount / spam API
+  useEffect(() => {
+    const t = setTimeout(() => setCautareDebounced(filtre.cautare.trim()), 250);
+    return () => clearTimeout(t);
+  }, [filtre.cautare]);
+
+  const filtreEfective = useMemo(
+    () => ({ ...filtre, cautare: cautareDebounced }),
+    [filtre.prioritate, filtre.judet, filtre.status_reglementare, filtre.status_acoperire, filtre.arhivate, cautareDebounced]
+  );
+
+  const construiesteQuery = useCallback((f) => {
     const conditii = [];
-    if (!filtre.arhivate) conditii.push({ archived: { $ne: true } });
-    if (filtre.prioritate !== 'toate') conditii.push({ prioritate: filtre.prioritate });
-    if (filtre.judet !== 'toate') conditii.push({ judet: filtre.judet });
-    if (filtre.status_reglementare !== 'toate') conditii.push({ status_reglementare: filtre.status_reglementare });
-    if (filtre.status_acoperire !== 'toate') conditii.push({ status_acoperire: filtre.status_acoperire });
-    if (filtre.cautare.trim()) conditii.push({ nume: { $regex: filtre.cautare.trim(), $options: 'i' } });
+    if (!f.arhivate) conditii.push({ archived: { $ne: true } });
+    if (f.prioritate !== 'toate') conditii.push({ prioritate: f.prioritate });
+    if (f.judet !== 'toate') conditii.push({ judet: f.judet });
+    if (f.status_reglementare !== 'toate') conditii.push({ status_reglementare: f.status_reglementare });
+    if (f.status_acoperire !== 'toate') conditii.push({ status_acoperire: f.status_acoperire });
+    if (f.cautare) conditii.push({ nume: { $regex: f.cautare, $options: 'i' } });
     if (conditii.length === 0) return {};
     if (conditii.length === 1) return conditii[0];
     return { $and: conditii };
-  }, [filtre]);
+  }, []);
 
   const incarca = useCallback(
-    async (reset = true) => {
-      if (reset) {
-        setSeIncarca(true);
+    async ({ reset = true, initial = false, cursorCurent = null } = {}) => {
+      if (initial) {
+        setSeIncarcaInitial(true);
         setEroare(null);
+      } else if (reset) {
+        setSeFiltreaza(true);
       } else {
         setSeIncarcaMaiMulte(true);
       }
       try {
-        const page = await api.entities.Localitate.filter(construiesteQuery(), {
+        const page = await api.entities.Localitate.filter(construiesteQuery(filtreEfective), {
           sort: 'prioritate',
           limit: 25,
-          cursor: reset ? undefined : cursor,
+          cursor: reset ? undefined : cursorCurent,
         });
         setLista((prev) => (reset ? page.items || [] : [...prev, ...(page.items || [])]));
         setCursor(page.next_cursor || null);
         setAreMaiMulte(!!page.has_more);
+        setEroare(null);
       } catch (e) {
         setEroare(e.message || 'Nu am putut încărca localitățile.');
       } finally {
-        setSeIncarca(false);
+        setSeIncarcaInitial(false);
+        setSeFiltreaza(false);
         setSeIncarcaMaiMulte(false);
       }
     },
-    [construiesteQuery, cursor]
+    [construiesteQuery, filtreEfective]
   );
 
   const incarcaNumaratori = useCallback(async () => {
     try {
-      const [reguli, zone] = await Promise.all([
+      const [reguli, zone, catalogJudete] = await Promise.all([
         api.entities.TaxaAcces.aggregate({ query: { status: { $ne: 'Arhivat' } }, groupBy: 'localitate_id', limit: 1000 }),
         api.entities.Zona.aggregate({ query: { archived: { $ne: true } }, groupBy: 'localitate_id', limit: 1000 }),
+        api.entities.Localitate.filter(
+          { archived: { $ne: true } },
+          { sort: 'judet', limit: 500, fields: ['judet'] }
+        ),
       ]);
       const laHarta = (randuri) =>
         (randuri || []).reduce((acc, r) => {
@@ -103,6 +132,7 @@ export default function Localitati() {
         }, {});
       setNumarReguli(laHarta(reguli.rows));
       setNumarZone(laHarta(zone.rows));
+      setToatePentruJudete(catalogJudete.items || []);
     } catch {
       setNumarReguli({});
       setNumarZone({});
@@ -110,26 +140,29 @@ export default function Localitati() {
   }, []);
 
   useEffect(() => {
-    incarca(true);
-     
-  }, [filtre]);
+    incarca({ reset: true, initial: seIncarcaInitial && lista.length === 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when effective filters change
+  }, [filtreEfective]);
 
   useEffect(() => {
     incarcaNumaratori();
   }, [incarcaNumaratori]);
 
   const judete = useMemo(() => {
-    const set = new Set(lista.map((l) => l.judet).filter(Boolean));
-    return Array.from(set).sort();
-  }, [lista]);
+    const set = new Set(toatePentruJudete.map((l) => l.judet).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ro'));
+  }, [toatePentruJudete]);
 
   const arhiveaza = async () => {
     if (!deArhivat) return;
     try {
       await api.entities.Localitate.update(deArhivat.id, { archived: true });
-      toast({ title: 'Localitatea a fost arhivată', description: `${deArhivat.nume} rămâne în baza de date, cu istoricul intact.` });
+      toast({
+        title: 'Localitatea a fost arhivată',
+        description: `${deArhivat.nume} rămâne în baza de date, cu istoricul intact.`,
+      });
       setDeArhivat(null);
-      incarca(true);
+      incarca({ reset: true });
       incarcaNumaratori();
     } catch (e) {
       toast({ title: 'Arhivarea nu a reușit', description: e.message, variant: 'destructive' });
@@ -137,9 +170,6 @@ export default function Localitati() {
   };
 
   const seteazaFiltru = (camp, valoare) => setFiltre((f) => ({ ...f, [camp]: valoare }));
-
-  if (seIncarca) return <StareIncarcare mesaj="Se încarcă localitățile…" />;
-  if (eroare) return <StareEroare mesaj={eroare} onReincearca={() => incarca(true)} />;
 
   return (
     <div>
@@ -161,7 +191,13 @@ export default function Localitati() {
           <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după denumire</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-            <Input value={filtre.cautare} onChange={(e) => seteazaFiltru('cautare', e.target.value)} placeholder="Ex.: Otopeni" className="pl-8" />
+            <Input
+              value={filtre.cautare}
+              onChange={(e) => seteazaFiltru('cautare', e.target.value)}
+              placeholder="Ex.: Otopeni, București…"
+              className="pl-8"
+              autoComplete="off"
+            />
           </div>
         </div>
         <div>
@@ -239,109 +275,170 @@ export default function Localitati() {
         </div>
       </div>
 
-      {lista.length === 0 ? (
-        <EmptyState
-          icon={MapPin}
-          titlu="Nicio localitate găsită"
-          descriere={
-            filtre.cautare || filtre.prioritate !== 'toate'
-              ? 'Niciun rezultat pentru filtrele selectate. Încearcă să le lărgești.'
-              : 'Adaugă prima localitate sau importă lista dintr-un fișier CSV.'
-          }
-          actiune={
-            esteAdmin ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button onClick={() => setDialog({ tip: 'localitate', item: null })}>Adaugă o localitate</Button>
-                <Button asChild variant="outline">
-                  <Link to="/setari">Importă din CSV</Link>
-                </Button>
-              </div>
-            ) : null
-          }
-        />
+      {eroare ? (
+        <StareEroare mesaj={eroare} onReincearca={() => incarca({ reset: true })} />
+      ) : seIncarcaInitial ? (
+        <StareIncarcare mesaj="Se încarcă localitățile…" />
       ) : (
-        <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-            <table className="w-full min-w-[1080px] text-sm">
-              <caption className="sr-only">Lista localităților acoperite</caption>
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <th scope="col" className="px-3 py-2 font-medium">Localitate</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Județ</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Prioritate</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Reglementare</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Acoperire</th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">Reguli</th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">Zone</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Ultima verificare</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Acțiuni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lista.map((l) => (
-                  <tr key={l.id} className="border-b border-slate-100 last:border-b-0 align-top">
-                    <td className="px-3 py-2">
-                      <Link to={`/localitati/${l.id}`} className="font-medium text-blue-700 hover:underline">
-                        {l.nume}
-                      </Link>
-                      {l.este_demo ? <StatusBadge valoare="DEMO" className="ml-2" /> : null}
-                      {l.archived ? <StatusBadge valoare="Arhivată" className="ml-2" /> : null}
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">{l.judet || '—'}</td>
-                    <td className="px-3 py-2">
-                      <StatusBadge valoare={l.prioritate} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge valoare={l.status_reglementare} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge valoare={l.status_acoperire} />
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{numarRo(numarReguli[l.id] || 0, 0)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{numarRo(numarZone[l.id] || 0, 0)}</td>
-                    <td className="px-3 py-2 text-slate-600">{l.ultima_verificare ? dataRo(l.ultima_verificare) : 'Neverificată'}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Button asChild size="sm" variant="ghost">
-                          <Link to={`/localitati/${l.id}`}>Vezi detalii</Link>
-                        </Button>
-                        {esteAdmin ? (
-                          <>
-                            <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'localitate', item: l })} aria-label={`Editează ${l.nume}`}>
-                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+        <div className={seFiltreaza ? 'opacity-60 transition-opacity' : undefined}>
+          {lista.length === 0 ? (
+            <EmptyState
+              icon={MapPin}
+              titlu="Nicio localitate găsită"
+              descriere={
+                filtre.cautare || filtre.prioritate !== 'toate' || filtre.judet !== 'toate'
+                  ? 'Niciun rezultat pentru filtrele selectate. Încearcă să le lărgești.'
+                  : 'Adaugă prima localitate sau importă lista dintr-un fișier CSV.'
+              }
+              actiune={
+                esteAdmin ? (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button onClick={() => setDialog({ tip: 'localitate', item: null })}>Adaugă o localitate</Button>
+                    <Button asChild variant="outline">
+                      <Link to="/setari">Importă din CSV</Link>
+                    </Button>
+                  </div>
+                ) : null
+              }
+            />
+          ) : (
+            <>
+              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="w-full min-w-[1080px] text-sm">
+                  <caption className="sr-only">Lista localităților acoperite</caption>
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Localitate
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Județ
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Prioritate
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Reglementare
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Acoperire
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-right font-medium">
+                        Reguli
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-right font-medium">
+                        Zone
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Ultima verificare
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-medium">
+                        Acțiuni
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lista.map((l) => (
+                      <tr key={l.id} className="border-b border-slate-100 last:border-b-0 align-top">
+                        <td className="px-3 py-2">
+                          <Link to={`/localitati/${l.id}`} className="font-medium text-blue-700 hover:underline">
+                            {l.nume}
+                          </Link>
+                          {l.este_demo ? <StatusBadge valoare="DEMO" className="ml-2" /> : null}
+                          {l.archived ? <StatusBadge valoare="Arhivată" className="ml-2" /> : null}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{l.judet || '—'}</td>
+                        <td className="px-3 py-2">
+                          <StatusBadge valoare={l.prioritate} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <StatusBadge valoare={l.status_reglementare} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <StatusBadge valoare={l.status_acoperire} />
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                          {numarRo(numarReguli[l.id] || 0, 0)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                          {numarRo(numarZone[l.id] || 0, 0)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {l.ultima_verificare ? dataRo(l.ultima_verificare) : 'Neverificată'}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Button asChild size="sm" variant="ghost">
+                              <Link to={`/localitati/${l.id}`}>Vezi detalii</Link>
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'zona', localitateId: l.id })} aria-label={`Adaugă zonă pentru ${l.nume}`}>
-                              <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'regula', localitateId: l.id })} aria-label={`Adaugă regulă pentru ${l.nume}`}>
-                              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'sursa', localitateId: l.id })} aria-label={`Adaugă document pentru ${l.nume}`}>
-                              <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                            </Button>
-                            {!l.archived ? (
-                              <Button size="sm" variant="ghost" onClick={() => setDeArhivat(l)} aria-label={`Arhivează ${l.nume}`}>
-                                <Archive className="h-3.5 w-3.5" aria-hidden="true" />
-                              </Button>
+                            {esteAdmin ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDialog({ tip: 'localitate', item: l })}
+                                  aria-label={`Editează ${l.nume}`}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDialog({ tip: 'zona', localitateId: l.id })}
+                                  aria-label={`Adaugă zonă pentru ${l.nume}`}
+                                >
+                                  <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDialog({ tip: 'regula', localitateId: l.id })}
+                                  aria-label={`Adaugă regulă pentru ${l.nume}`}
+                                >
+                                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDialog({ tip: 'sursa', localitateId: l.id })}
+                                  aria-label={`Adaugă document pentru ${l.nume}`}
+                                >
+                                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                                </Button>
+                                {!l.archived ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setDeArhivat(l)}
+                                    aria-label={`Arhivează ${l.nume}`}
+                                  >
+                                    <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                                  </Button>
+                                ) : null}
+                              </>
                             ) : null}
-                          </>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
 
-          {areMaiMulte ? (
-            <div className="mt-4 flex justify-center">
-              <Button variant="outline" onClick={() => incarca(false)} disabled={seIncarcaMaiMulte}>
-                {seIncarcaMaiMulte ? 'Se încarcă…' : 'Încarcă mai multe'}
-              </Button>
-            </div>
-          ) : null}
-        </>
+              {areMaiMulte ? (
+                <div className="mt-4 flex justify-center">
+                  <Button
+                    variant="outline"
+                    onClick={() => incarca({ reset: false, cursorCurent: cursor })}
+                    disabled={seIncarcaMaiMulte}
+                  >
+                    {seIncarcaMaiMulte ? 'Se încarcă…' : 'Încarcă mai multe'}
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
       )}
 
       <LocalitateFormDialog
@@ -349,7 +446,7 @@ export default function Localitati() {
         onOpenChange={(o) => !o && setDialog({ tip: null })}
         localitate={dialog.item}
         onSalvat={() => {
-          incarca(true);
+          incarca({ reset: true });
           incarcaNumaratori();
         }}
       />
@@ -359,7 +456,7 @@ export default function Localitati() {
         localitateId={dialog.localitateId}
         localitati={lista}
         onSalvat={() => {
-          incarca(true);
+          incarca({ reset: true });
           incarcaNumaratori();
         }}
       />
@@ -371,7 +468,7 @@ export default function Localitati() {
         zone={[]}
         surse={[]}
         onSalvat={() => {
-          incarca(true);
+          incarca({ reset: true });
           incarcaNumaratori();
         }}
       />
@@ -380,7 +477,7 @@ export default function Localitati() {
         onOpenChange={(o) => !o && setDialog({ tip: null })}
         localitateId={dialog.localitateId}
         localitati={lista}
-        onSalvat={() => incarca(true)}
+        onSalvat={() => incarca({ reset: true })}
       />
 
       <AlertDialog open={!!deArhivat} onOpenChange={(o) => !o && setDeArhivat(null)}>
@@ -388,8 +485,9 @@ export default function Localitati() {
           <AlertDialogHeader>
             <AlertDialogTitle>Arhivezi localitatea {deArhivat?.nume}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Localitatea are {numarReguli[deArhivat?.id] || 0} reguli și {numarZone[deArhivat?.id] || 0} zone asociate. Arhivarea
-              păstrează toate înregistrările și istoricul curselor; localitatea nu mai apare în listele operaționale.
+              Localitatea are {numarReguli[deArhivat?.id] || 0} reguli și {numarZone[deArhivat?.id] || 0} zone
+              asociate. Arhivarea păstrează toate înregistrările și istoricul curselor; localitatea nu mai
+              apare în listele operaționale.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -161,6 +161,8 @@ export function parseOrder(sort) {
   if (col === 'created_date') col = 'created_at';
   if (col === 'updated_date') col = 'updated_at';
   if (!/^[a-z0-9_]+$/i.test(col)) return 'created_at DESC';
+  // Coada de verificare: fără dată first, apoi cele mai vechi
+  if (col === 'data_verificare' && !desc) return `${col} ASC NULLS FIRST`;
   return `${col} ${desc ? 'DESC' : 'ASC'}`;
 }
 
@@ -180,67 +182,83 @@ export function pickWritable(cfg, data) {
 
 /**
  * Translate Mongo-style entity filters into SQL WHERE clauses.
- * Supports: equality, null, $ne, $in, $and, nested objects of operators.
+ * Supports: equality, null, $ne, $in, $exists, $regex(+ $options i), $lt/$lte/$gt/$gte, $and, $or.
  */
 export function buildFilterClauses(filters, { allowedKeys, startIndex = 1 }) {
-  const clauses = [];
   const params = [];
   let i = startIndex;
 
-  function pushClause(sql, ...values) {
-    let out = sql;
-    for (const value of values) {
-      out = out.replace('?', `$${i++}`);
-      params.push(value);
-    }
-    clauses.push(out);
+  function ph(value) {
+    params.push(value);
+    return `$${i++}`;
   }
 
-  function applyField(key, value) {
-    if (!allowedKeys.has(key)) return;
-    if (value === null) {
-      pushClause(`${key} IS NULL`);
-      return;
-    }
+  function fieldClause(key, value) {
+    if (!allowedKeys.has(key)) return null;
+    if (value === null) return `${key} IS NULL`;
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       if (Object.prototype.hasOwnProperty.call(value, '$ne')) {
-        if (value.$ne === null) pushClause(`${key} IS NOT NULL`);
-        else pushClause(`${key} IS DISTINCT FROM ?`, value.$ne);
-        return;
+        if (value.$ne === null) return `${key} IS NOT NULL`;
+        return `${key} IS DISTINCT FROM ${ph(value.$ne)}`;
       }
       if (Object.prototype.hasOwnProperty.call(value, '$in') && Array.isArray(value.$in)) {
-        if (value.$in.length === 0) {
-          pushClause('FALSE');
-          return;
-        }
-        const placeholders = value.$in.map(() => '?').join(', ');
-        let sql = `${key} IN (${placeholders})`;
-        for (const v of value.$in) {
-          sql = sql.replace('?', `$${i++}`);
-          params.push(v);
-        }
-        clauses.push(sql);
-        return;
+        if (value.$in.length === 0) return 'FALSE';
+        return `${key} IN (${value.$in.map((v) => ph(v)).join(', ')})`;
       }
-      return;
+      if (Object.prototype.hasOwnProperty.call(value, '$exists')) {
+        return value.$exists ? `${key} IS NOT NULL` : `${key} IS NULL`;
+      }
+      if (Object.prototype.hasOwnProperty.call(value, '$regex')) {
+        const raw = String(value.$regex ?? '');
+        const escaped = raw
+          .replace(/\\/g, '\\\\')
+          .replace(/%/g, '\\%')
+          .replace(/_/g, '\\_');
+        const like = `%${escaped}%`;
+        const insensitive = String(value.$options || '').includes('i');
+        return insensitive
+          ? `${key} ILIKE ${ph(like)} ESCAPE '\\'`
+          : `${key} LIKE ${ph(like)} ESCAPE '\\'`;
+      }
+      const parts = [];
+      if (Object.prototype.hasOwnProperty.call(value, '$lt')) parts.push(`${key} < ${ph(value.$lt)}`);
+      if (Object.prototype.hasOwnProperty.call(value, '$lte')) parts.push(`${key} <= ${ph(value.$lte)}`);
+      if (Object.prototype.hasOwnProperty.call(value, '$gt')) parts.push(`${key} > ${ph(value.$gt)}`);
+      if (Object.prototype.hasOwnProperty.call(value, '$gte')) parts.push(`${key} >= ${ph(value.$gte)}`);
+      if (parts.length) return parts.join(' AND ');
+      return null;
     }
-    pushClause(`${key} = ?`, value);
+    return `${key} = ${ph(value)}`;
   }
 
-  function walk(node) {
-    if (!node || typeof node !== 'object') return;
+  function nodeClause(node) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+
     if (Array.isArray(node.$and)) {
-      for (const part of node.$and) walk(part);
-      return;
+      const parts = node.$and.map(nodeClause).filter(Boolean);
+      return parts.length ? `(${parts.join(' AND ')})` : null;
     }
+    if (Array.isArray(node.$or)) {
+      const parts = node.$or.map(nodeClause).filter(Boolean);
+      return parts.length ? `(${parts.join(' OR ')})` : null;
+    }
+
+    const parts = [];
     for (const [key, value] of Object.entries(node)) {
-      if (key === '$and') continue;
-      applyField(key, value);
+      if (key === '$and' || key === '$or') {
+        const nested = nodeClause({ [key]: value });
+        if (nested) parts.push(nested);
+        continue;
+      }
+      const clause = fieldClause(key, value);
+      if (clause) parts.push(clause);
     }
+    if (!parts.length) return null;
+    return parts.length === 1 ? parts[0] : `(${parts.join(' AND ')})`;
   }
 
-  walk(filters || {});
-  return { clauses, params, nextIndex: i };
+  const sql = nodeClause(filters || {});
+  return { clauses: sql ? [sql] : [], params, nextIndex: i };
 }
 
 export function decodeCursor(cursor) {

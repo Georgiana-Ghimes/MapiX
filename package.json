@@ -1,8 +1,8 @@
 {
   "name": "mvp",
   "private": true,
-  "version": "0.2.0",
-  "build": 2,
+  "version": "0.3.0",
+  "build": 3,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,11 @@
     "preview": "vite preview",
     "db:create": "npm run create-db --prefix server",
     "db:migrate": "npm run migrate --prefix server",
-    "db:seed": "npm run seed --prefix server"
+    "db:seed": "npm run seed --prefix server",
+    "db:import-safe": "npm run import-safe --prefix server",
+    "db:import-safe:force": "npm run import-safe:force --prefix server",
+    "db:import-queue": "npm run import-queue --prefix server",
+    "db:import-queue:force": "npm run import-queue:force --prefix server"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

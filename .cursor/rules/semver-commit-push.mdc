@@ -1,0 +1,41 @@
+---
+description: La „commit și push” crește logic versiunea semver și build-ul MapiX
+alwaysApply: true
+---
+
+# Semver + build la commit & push
+
+Sursa de adevăr: `package.json` din rădăcină — câmpurile `"version"` (semver `MAJOR.MINOR.PATCH`) și `"build"` (întreg monotonic).
+
+Vite injectează valorile ca `__APP_VERSION__` / `__APP_BUILD__` (afișate pe login și în sidebar).
+
+## Când se aplică
+
+Ori de câte ori utilizatorul cere **commit și push** (sau echivalent clar: „commit + push”, „commitează și urcă”), **înainte** de commit:
+
+1. Analizează modificările din staging / working tree.
+2. Actualizează `package.json`:
+   - **`build`**: crește **mereu** cu +1.
+   - **`version`** (semver), după tipul schimbării:
+     - **PATCH** (`x.y.Z+1`) — bugfix, copy, refactor mic, config, docs în repo, chore.
+     - **MINOR** (`x.Y+1.0`) — funcționalitate nouă compatibilă, ecran/API nou fără breaking.
+     - **MAJOR** (`X+1.0.0`) — breaking (API/contract, auth, schemă DB incompatibilă, eliminare feature).
+3. Include `package.json` în același commit.
+4. Menționează în mesajul de commit versiunea nouă, ex. `v1.1.0+build.12`.
+5. Apoi push ca de obicei.
+
+## Reguli
+
+- Nu scădea niciodată `build`.
+- Un singur bump pe un ciclu commit+push (nu dubla dacă ai mai multe commit-uri în același push cerut o singură dată — bump o dată pe cerere).
+- Dacă utilizatorul cere explicit o versiune (ex. „fa 1.2.0”), respectă cererea și crește totuși `build` cu +1.
+- Nu bump la commit-uri pe care utilizatorul le cere **fără** push, decât dacă cere explicit și bump de versiune.
+- Nu edita manual afișajul din UI pentru numere — doar `package.json`.
+
+## Exemplu
+
+Stare: `"version": "0.1.0", "build": 1` (MVP = serie `0.x` până la primul release stabil)  
+Commit: adaugă export CSV nou → `"version": "0.2.0", "build": 2`  
+Mesaj: `Add CSV export for taxes (v0.2.0+build.2)`.
+
+Rămâi pe **0.x** până utilizatorul cere explicit trecerea la **1.0.0**.

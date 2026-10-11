@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import MarcaAplicatie, { NUME_APLICATIE } from '@/components/MarcaAplicatie';
+import AppVersion from '@/components/AppVersion';
 import { cn } from '@/lib/utils';
 
 const SECTIUNI = [
@@ -96,8 +97,11 @@ export default function Layout() {
           <MarcaAplicatie />
         </div>
         <Navigatie />
-        <div className="border-t border-slate-200 px-4 py-3 text-[11px] leading-relaxed text-slate-400">
-          Datele juridice nu înlocuiesc verificarea la sursa oficială.
+        <div className="border-t border-slate-200 px-4 py-3 space-y-2">
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            Datele juridice nu înlocuiesc verificarea la sursa oficială.
+          </p>
+          <AppVersion />
         </div>
       </aside>
 
@@ -110,11 +114,14 @@ export default function Layout() {
                   <Menu className="h-4 w-4" />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="left" className="w-72 p-0">
+              <SheetContent side="left" className="flex w-72 flex-col p-0">
                 <SheetTitle className="flex h-16 items-center border-b border-slate-200 px-5 text-left">
                   <MarcaAplicatie />
                 </SheetTitle>
                 <Navigatie onNavigat={() => setMeniuDeschis(false)} />
+                <div className="mt-auto border-t border-slate-200 px-4 py-3">
+                  <AppVersion />
+                </div>
               </SheetContent>
             </Sheet>
 

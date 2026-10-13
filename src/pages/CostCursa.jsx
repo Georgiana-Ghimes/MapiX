@@ -10,7 +10,9 @@ import CursaRezumat from '@/components/CursaRezumat';
 import LocalitateSelect from '@/components/LocalitateSelect';
 import VehiculSelect from '@/components/VehiculSelect';
 import StatusBadge from '@/components/StatusBadge';
+import ZonaDescriere from '@/components/ZonaDescriere';
 import { Button } from '@/components/ui/button';
+
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -18,7 +20,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { acumISO, azi, dataOraRo, laNumar, sumaRo } from '@/lib/format';
-import { determinaStatusCalcul, evalueazaRegula, sintetizeazaCalcul } from '@/lib/reguliTaxe';
+import {
+  determinaStatusCalcul,
+  evalueazaRegula,
+  marcheazaTarifeAlternative,
+  sintetizeazaCalcul,
+  zoneCompatibile,
+} from '@/lib/reguliTaxe';
 import { TIPURI_MASA } from '@/lib/enum';
 
 const FORM_GOL = {
@@ -58,7 +66,10 @@ export default function CostCursa() {
       const [pageLocalitati, pageVehicule, pageZone, pageCurse] = await Promise.all([
         api.entities.Localitate.filter({ archived: { $ne: true } }, { sort: 'nume', limit: 500, fields: ['nume', 'judet', 'status_acoperire'] }),
         api.entities.Vehicul.filter({ status: 'Activ' }, { sort: 'numar_inmatriculare', limit: 200 }),
-        api.entities.Zona.filter({ archived: { $ne: true } }, { sort: 'nume_zona', limit: 500, fields: ['nume_zona', 'localitate_id', 'tip_zona'] }),
+        api.entities.Zona.filter(
+          { archived: { $ne: true } },
+          { sort: 'nume_zona', limit: 500, fields: ['nume_zona', 'localitate_id', 'tip_zona', 'descriere'] }
+        ),
         api.entities.Cursa.filter({}, { sort: '-data_calcul', limit: 10, fields: ['nume_cursa', 'origine', 'destinatie', 'total_estimare', 'moneda_rezultat', 'status_calcul', 'data_calcul'] }),
       ]);
       setLocalitati(pageLocalitati.items || []);
@@ -157,14 +168,27 @@ export default function CostCursa() {
         if (!reguli.length || (localitate && localitate.status_acoperire !== 'Verificată')) {
           localitatiNeacoperite.push(oprire.nume);
         }
-        reguli.forEach((regula) => {
-          const evaluare = evalueazaRegula(regula, context);
-          if (regula.zona_id && !zoneSelectate.includes(regula.zona_id)) {
-            const zona = zone.find((z) => z.id === regula.zona_id);
-            evaluare.status = 'De verificat';
-            evaluare.cost = null;
-            evaluare.motiv = `Regula se aplică zonei „${zona ? zona.nume_zona : 'nedefinită'}”. Selectează zona în traseu pentru a fi inclusă în calcul.`;
-          }
+        const evaluariOprire = marcheazaTarifeAlternative(
+          reguli.map((regula) => {
+            const evaluare = evalueazaRegula(regula, context);
+            if (regula.zona_id && !zoneSelectate.includes(regula.zona_id)) {
+              const zona = zone.find((z) => z.id === regula.zona_id);
+              const acoperitaDeSelectie = zoneSelectate.some((zid) => {
+                const filtru = zone.find((z) => z.id === zid);
+                return filtru && zona && zoneCompatibile(filtru, zona);
+              });
+              if (!acoperitaDeSelectie) {
+                evaluare.status = 'De verificat';
+                evaluare.cost = null;
+                evaluare.motiv = `Regula se aplică zonei „${zona ? zona.nume_zona : 'nedefinită'}”. Selectează zona în traseu pentru a fi inclusă în calcul.`;
+              }
+            }
+            return evaluare;
+          }),
+          context.durataZile
+        );
+        evaluariOprire.forEach((evaluare) => {
+          const regula = evaluare.regula;
           if (evaluare.status === 'Exclus') return;
           if (evaluare.status === 'Neaplicabil' && !evaluare.faraCost) return;
 
@@ -346,18 +370,25 @@ export default function CostCursa() {
                 Regulile legate de o anumită zonă se aplică doar dacă marchezi zona aici. Nu presupunem că un traseu trece printr-o zonă
                 doar pentru că tranzitează localitatea.
               </p>
-              <ul className="space-y-1.5">
+              <ul className="space-y-2">
                 {zoneTraseu.map((z) => (
-                  <li key={z.id}>
-                    <label className="flex items-center gap-2 text-xs text-slate-700">
+                  <li key={z.id} className="space-y-1.5">
+                    <label className="flex items-start gap-2 text-xs text-slate-700">
                       <Checkbox
+                        className="mt-0.5"
                         checked={zoneSelectate.includes(z.id)}
                         onCheckedChange={(bifat) =>
                           setZoneSelectate((lista) => (bifat ? [...lista, z.id] : lista.filter((x) => x !== z.id)))
                         }
                       />
-                      {z.nume_zona} · {localitati.find((l) => l.id === z.localitate_id)?.nume} · {z.tip_zona}
+                      <span>
+                        <span className="font-medium">
+                          {z.nume_zona} · {localitati.find((l) => l.id === z.localitate_id)?.nume}
+                        </span>
+                        <span className="text-slate-500"> · {z.tip_zona}</span>
+                      </span>
                     </label>
+                    <ZonaDescriere zona={z} compact className="ml-6" />
                   </li>
                 ))}
               </ul>

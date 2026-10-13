@@ -4,24 +4,27 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    /* Panou aplicație: albastru-gri calm (nu gri rece slate-50) */
+    --background: 214 32% 96%;
+    --foreground: 222 47% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
+    --popover-foreground: 222 47% 11%;
     --primary: 221 83% 45%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96.1%;
+    --secondary: 214 28% 94%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 214 95% 96%;
+    /* Secundar pe alb ≈ slate-700 (≥ 4.5:1, WCAG AA) */
+    --muted: 214 24% 93%;
+    --muted-foreground: 215 25% 27%;
+    --accent: 214 55% 95%;
     --accent-foreground: 221 70% 32%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
+    /* Contur UI mai vizibil (≥ 3:1 față de alb pentru elemente non-text) */
+    --border: 214 18% 78%;
+    --input: 214 18% 78%;
     --ring: 221 83% 45%;
     --chart-1: 221 83% 53%;
     --chart-2: 173 58% 39%;
@@ -92,6 +95,16 @@
 
   table {
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Fundal pagină: nuanță profesională + atmosferă foarte discretă */
+@layer utilities {
+  .bg-app-canvas {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(ellipse 110% 70% at 85% -10%, hsl(214 70% 92% / 0.65), transparent 55%),
+      radial-gradient(ellipse 90% 55% at -5% 105%, hsl(200 45% 94% / 0.45), transparent 50%);
   }
 }
 

@@ -24,43 +24,80 @@ export default function Surse() {
   const esteAdmin = user?.role === 'admin';
   const [lista, setLista] = useState([]);
   const [localitati, setLocalitati] = useState([]);
-  const [seIncarca, setSeIncarca] = useState(true);
+  const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
+  const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [eroare, setEroare] = useState(null);
   const [filtre, setFiltre] = useState(FILTRE_GOL);
+  const [cautareDebounced, setCautareDebounced] = useState('');
   const [formular, setFormular] = useState({ deschis: false, item: null });
 
-  const construiesteQuery = useCallback(() => {
+  useEffect(() => {
+    const t = setTimeout(() => setCautareDebounced(filtre.cautare.trim()), 250);
+    return () => clearTimeout(t);
+  }, [filtre.cautare]);
+
+  const filtreEfective = useMemo(
+    () => ({ ...filtre, cautare: cautareDebounced }),
+    [filtre.localitate, filtre.tip_act, filtre.status, filtre.an, cautareDebounced]
+  );
+
+  const construiesteQuery = useCallback((f, localitateIdsDinCautare = []) => {
     const conditii = [];
-    if (filtre.localitate !== 'toate') conditii.push({ localitate_id: filtre.localitate });
-    if (filtre.tip_act !== 'toate') conditii.push({ tip_act: filtre.tip_act });
-    if (filtre.status !== 'toate') conditii.push({ status_act: filtre.status });
-    if (filtre.an !== 'toate') conditii.push({ an_fiscal: Number(filtre.an) });
-    if (filtre.cautare.trim()) conditii.push({ titlu_document: { $regex: filtre.cautare.trim(), $options: 'i' } });
+    if (f.localitate !== 'toate') conditii.push({ localitate_id: f.localitate });
+    if (f.tip_act !== 'toate') conditii.push({ tip_act: f.tip_act });
+    if (f.status !== 'toate') conditii.push({ status_act: f.status });
+    if (f.an !== 'toate') conditii.push({ an_fiscal: Number(f.an) });
+    if (f.cautare) {
+      const or = [{ titlu_document: { $regex: f.cautare, $options: 'i' } }];
+      if (localitateIdsDinCautare.length) or.push({ localitate_id: { $in: localitateIdsDinCautare } });
+      conditii.push(or.length === 1 ? or[0] : { $or: or });
+    }
     if (conditii.length === 0) return {};
     if (conditii.length === 1) return conditii[0];
     return { $and: conditii };
-  }, [filtre]);
+  }, []);
 
-  const incarca = useCallback(async () => {
-    setSeIncarca(true);
-    setEroare(null);
-    try {
-      const [pageSurse, pageLocalitati] = await Promise.all([
-        api.entities.SursaAct.filter(construiesteQuery(), { sort: '-data_act', limit: 200 }),
-        api.entities.Localitate.filter({ archived: { $ne: true } }, { sort: 'nume', limit: 500, fields: ['nume', 'judet'] }),
-      ]);
-      setLista(pageSurse.items || []);
-      setLocalitati(pageLocalitati.items || []);
-    } catch (e) {
-      setEroare(e.message || 'Nu am putut încărca documentele.');
-    } finally {
-      setSeIncarca(false);
-    }
-  }, [construiesteQuery]);
+  const incarca = useCallback(
+    async ({ initial = false } = {}) => {
+      if (initial) {
+        setSeIncarcaInitial(true);
+        setEroare(null);
+      } else {
+        setSeFiltreaza(true);
+      }
+      try {
+        let localitateIdsDinCautare = [];
+        if (filtreEfective.cautare) {
+          const pageLoc = await api.entities.Localitate.filter(
+            { nume: { $regex: filtreEfective.cautare, $options: 'i' }, archived: { $ne: true } },
+            { limit: 100, fields: ['id'] }
+          );
+          localitateIdsDinCautare = (pageLoc.items || []).map((l) => l.id);
+        }
+        const [pageSurse, pageLocalitati] = await Promise.all([
+          api.entities.SursaAct.filter(construiesteQuery(filtreEfective, localitateIdsDinCautare), {
+            sort: '-data_act',
+            limit: 200,
+          }),
+          api.entities.Localitate.filter({ archived: { $ne: true } }, { sort: 'nume', limit: 500, fields: ['nume', 'judet'] }),
+        ]);
+        setLista(pageSurse.items || []);
+        setLocalitati(pageLocalitati.items || []);
+        setEroare(null);
+      } catch (e) {
+        setEroare(e.message || 'Nu am putut încărca documentele.');
+      } finally {
+        setSeIncarcaInitial(false);
+        setSeFiltreaza(false);
+      }
+    },
+    [construiesteQuery, filtreEfective]
+  );
 
   useEffect(() => {
-    incarca();
-  }, [incarca]);
+    incarca({ initial: seIncarcaInitial && lista.length === 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtreEfective]);
 
   const faraVerificareRecenta = useMemo(() => {
     return lista.filter((s) => {
@@ -74,8 +111,8 @@ export default function Surse() {
     return Array.from(set).sort((a, b) => b - a);
   }, [lista]);
 
-  if (seIncarca) return <StareIncarcare mesaj="Se încarcă sursele și actele normative…" />;
-  if (eroare) return <StareEroare mesaj={eroare} onReincearca={incarca} />;
+  if (seIncarcaInitial) return <StareIncarcare mesaj="Se încarcă sursele și actele normative…" />;
+  if (eroare && lista.length === 0) return <StareEroare mesaj={eroare} onReincearca={() => incarca({ initial: true })} />;
 
   return (
     <div>
@@ -92,9 +129,9 @@ export default function Surse() {
         }
       />
 
-      <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-4 grid gap-3 rounded-xl border-2 border-slate-300/80 bg-slate-100/70 p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
         <div className="lg:col-span-2">
-          <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după titlu</Label>
+          <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după titlu sau localitate</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
             <Input value={filtre.cautare} onChange={(e) => setFiltre((f) => ({ ...f, cautare: e.target.value }))} className="pl-8" />
@@ -167,6 +204,7 @@ export default function Surse() {
         </p>
       ) : null}
 
+      <div className={seFiltreaza ? 'opacity-60 transition-opacity' : undefined} aria-busy={seFiltreaza || undefined}>
       {lista.length === 0 ? (
         <EmptyState
           titlu="Niciun document găsit"
@@ -174,7 +212,7 @@ export default function Surse() {
           actiune={esteAdmin ? <Button onClick={() => setFormular({ deschis: true, item: null })}>Adaugă un document</Button> : null}
         />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border-2 border-slate-300/80 bg-white shadow-sm">
           <table className="w-full min-w-[1100px] text-sm">
             <caption className="sr-only">Surse și acte normative</caption>
             <thead>
@@ -245,13 +283,14 @@ export default function Surse() {
           </table>
         </div>
       )}
+      </div>
 
       <SursaFormDialog
         open={formular.deschis}
         onOpenChange={(o) => setFormular((f) => ({ ...f, deschis: o }))}
         sursa={formular.item}
         localitati={localitati}
-        onSalvat={incarca}
+        onSalvat={() => incarca()}
       />
     </div>
   );

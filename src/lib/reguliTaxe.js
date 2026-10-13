@@ -66,6 +66,103 @@ export function potrivireMasa(regula, masa, tipMasa) {
   return { potrivit: true };
 }
 
+/** Litere de zonă din nume: „Zona A (…)” → ['A']; „Zonele A și B (…)” → ['A','B']. */
+function litereZonaDinNume(nume) {
+  const faraParanteze = String(nume || '').replace(/\([^)]*\)/g, ' ');
+  return faraParanteze.match(/\b([A-ZĂÂÎȘȚ])\b/g) || [];
+}
+
+function sufixZonaDinNume(nume) {
+  const m = String(nume || '').match(/\(([^)]+)\)\s*$/);
+  return m ? m[1].trim().toLowerCase() : '';
+}
+
+/**
+ * Zone combinate („Zonele A și B”) acoperă componentele („Zona A”, „Zona B”) cu același sufix,
+ * și invers — ca exceptarea ≤5 t de pe zona combinată să apară și la filtrul pe Zona A.
+ */
+export function zoneCompatibile(zonaFiltru, zonaCandidata) {
+  if (!zonaFiltru || !zonaCandidata) return false;
+  if (zonaFiltru.id === zonaCandidata.id) return true;
+  const litF = litereZonaDinNume(zonaFiltru.nume_zona);
+  const litC = litereZonaDinNume(zonaCandidata.nume_zona);
+  if (!litF.length || !litC.length) return false;
+  const sufF = sufixZonaDinNume(zonaFiltru.nume_zona);
+  const sufC = sufixZonaDinNume(zonaCandidata.nume_zona);
+  if (sufF && sufC && sufF !== sufC) return false;
+  const fAcoperaC = litC.every((l) => litF.includes(l));
+  const cAcoperaF = litF.every((l) => litC.includes(l));
+  return fAcoperaC || cAcoperaF;
+}
+
+/** true dacă regula trebuie evaluată pentru filtrul de zonă selectat. */
+export function regulaPotrivesteZona(regula, zonaId, zone = []) {
+  if (!zonaId || zonaId === 'toate') return true;
+  if (!regula.zona_id) return true;
+  if (regula.zona_id === zonaId) return true;
+  const filtru = zone.find((z) => z.id === zonaId);
+  const aRegulii = zone.find((z) => z.id === regula.zona_id);
+  if (!filtru || !aRegulii) return false;
+  return zoneCompatibile(filtru, aRegulii);
+}
+
+function tipUnitateTarifara(regula) {
+  const u = `${regula.unitate_tarifare || ''} ${regula.tip_taxa || ''}`.toLowerCase();
+  if (u.includes('zi')) return 'zi';
+  if (u.includes('lun')) return 'luna';
+  if (u.includes('an')) return 'an';
+  return 'alt';
+}
+
+function preferintaUnitatePentruDurata(durataZile) {
+  const zile = Number(durataZile);
+  if (!zile || zile <= 0) return null;
+  if (zile < 28) return 'zi';
+  if (zile < 360) return 'luna';
+  return 'an';
+}
+
+/**
+ * Pentru aceeași zonă + bandă de masă, păstrează tariful potrivit duratei (zi/lună/an)
+ * și marchează celelalte ca neaplicabile (nu se cumulează).
+ */
+export function marcheazaTarifeAlternative(evaluari = [], durataZile) {
+  const preferinta = preferintaUnitatePentruDurata(durataZile);
+  if (!preferinta) return evaluari;
+
+  const grupuri = new Map();
+  evaluari.forEach((e, idx) => {
+    if (e.categorie !== 'Taxă de acces') return;
+    if (!['Calculat', 'De verificat'].includes(e.status)) return;
+    if (e.cost === null || e.cost === undefined) return;
+    const tip = tipUnitateTarifara(e.regula);
+    if (tip === 'alt') return;
+    const cheie = [
+      e.regula.zona_id || '',
+      e.regula.masa_min_t ?? '',
+      e.regula.masa_max_t ?? '',
+      e.regula.tip_masa || '',
+    ].join('|');
+    if (!grupuri.has(cheie)) grupuri.set(cheie, []);
+    grupuri.get(cheie).push({ e, idx, tip });
+  });
+
+  const eticheta = { zi: 'zi', luna: 'lună', an: 'an' };
+  for (const lista of grupuri.values()) {
+    if (lista.length < 2) continue;
+    if (!lista.some((x) => x.tip === preferinta)) continue;
+    for (const { e, tip } of lista) {
+      if (tip === preferinta) continue;
+      e.status = 'Neaplicabil';
+      e.faraCost = false;
+      e.cost = null;
+      e.cantitate = null;
+      e.motiv = `Tarif alternativ (${e.regula.unitate_tarifare || e.regula.tip_taxa}); pentru durata aleasă se folosește tariful pe ${eticheta[preferinta]}.`;
+    }
+  }
+  return evaluari;
+}
+
 export function potrivireOrar(regula, ora) {
   if (!regula.ora_start || !regula.ora_end || !ora) return { potrivit: null };
   if (ora < regula.ora_start || ora > regula.ora_end) {
@@ -188,6 +285,13 @@ export function evalueazaRegula(regula, context = {}) {
   if (MOTIVE_CATEGORIE[rezultat.categorie]) {
     rezultat.faraCost = true;
     rezultat.motiv = MOTIVE_CATEGORIE[rezultat.categorie];
+    if (regula.tip_taxa === 'Gratuit') {
+      rezultat.cost = 0;
+      rezultat.cantitate = 1;
+      rezultat.moneda = 'Fără valoare monetară';
+    }
+    // Potrivire reușită — nu lăsa statusul implicit „Neaplicabil”.
+    rezultat.status = rezultat.necesitaVerificare ? 'De verificat' : 'Calculat';
     return rezultat;
   }
 
@@ -208,12 +312,13 @@ export function evalueazaRegula(regula, context = {}) {
 }
 
 export function grupeazaRezultate(randuri = []) {
+  const aplicabila = (r) => r.status !== 'Neaplicabil' && r.status !== 'Exclus';
   return {
-    interdictii: randuri.filter((r) => r.categorie === 'Interdicție'),
-    restrictii: randuri.filter((r) => r.categorie === 'Restricție'),
-    taxe: randuri.filter((r) => r.categorie === 'Taxă de acces' && r.status !== 'Neaplicabil'),
-    autorizatii: randuri.filter((r) => r.categorie === 'Autorizație'),
-    exceptari: randuri.filter((r) => r.categorie === 'Exceptare'),
+    interdictii: randuri.filter((r) => r.categorie === 'Interdicție' && aplicabila(r)),
+    restrictii: randuri.filter((r) => r.categorie === 'Restricție' && aplicabila(r)),
+    taxe: randuri.filter((r) => r.categorie === 'Taxă de acces' && aplicabila(r)),
+    autorizatii: randuri.filter((r) => r.categorie === 'Autorizație' && aplicabila(r)),
+    exceptari: randuri.filter((r) => r.categorie === 'Exceptare' && aplicabila(r)),
     neclare: randuri.filter(
       (r) => r.status === 'Necunoscut' || (r.status === 'De verificat' && r.cost === null)
     ),
@@ -373,16 +478,19 @@ export function construiesteAlerte({ localitati = [], reguli = [], zone = [], su
     }
   };
 
-  const numeLoc = (id) => {
-    const l = localitati.find((x) => x.id === id);
-    return l ? l.nume : 'Localitate necunoscută';
-  };
+  const byId = new Map(localitati.map((l) => [l.id, l]));
+  const numeLoc = (id) => byId.get(id)?.nume || 'Localitate necunoscută';
+  const esteP1 = (id) => byId.get(id)?.prioritate === 'P1';
+
+  // Reguli nesigure → o singură alertă agregată pe localitate (nu sute pe „De confirmat”).
+  const nesigurePeLoc = new Map();
 
   reguli
     .filter((r) => !r.este_demo)
     .forEach((r) => {
       const referinta = `„${r.denumire_regula}” (${numeLoc(r.localitate_id)})`;
       const baza = { localitate_id: r.localitate_id, taxa_id: r.id, este_demo: false };
+      const confirmat = r.incredere === 'Confirmat';
 
       if (r.perioada_valabilitate_end) {
         const zile = zilePanaLa(r.perioada_valabilitate_end, astazi);
@@ -416,21 +524,22 @@ export function construiesteAlerte({ localitati = [], reguli = [], zone = [], su
           severitate: 'Critică',
         });
       }
-      if (r.incredere && r.incredere !== 'Confirmat') {
-        adauga({
-          ...baza,
-          tip_alerta: 'Verificare necesară',
-          titlu: `Nivel de încredere „${r.incredere}”: ${referinta}`,
-          descriere: 'Regula nu are un statut de încredere „Confirmat”.',
-          severitate: 'Medie',
-        });
+
+      if (!confirmat) {
+        const prev = nesigurePeLoc.get(r.localitate_id) || { total: 0, faraSursa: 0 };
+        prev.total += 1;
+        if (!r.sursa_url && !r.act_normativ_id) prev.faraSursa += 1;
+        nesigurePeLoc.set(r.localitate_id, prev);
+        return;
       }
+
+      // Doar pe reguli Confirmate: lipsuri reale de ops (nu dublăm coada de verificare).
       if (!r.data_verificare) {
         adauga({
           ...baza,
           tip_alerta: 'Verificare necesară',
           titlu: `Verificare lipsă: ${referinta}`,
-          descriere: 'Regula nu are o dată a ultimei verificări.',
+          descriere: 'Regula confirmată nu are o dată a ultimei verificări.',
           severitate: 'Ridicată',
         });
       }
@@ -445,7 +554,19 @@ export function construiesteAlerte({ localitati = [], reguli = [], zone = [], su
       }
     });
 
-  detecteazaSuprapuneri(reguli.filter((r) => !r.este_demo)).forEach((avertisment) => {
+  nesigurePeLoc.forEach((info, localitateId) => {
+    adauga({
+      localitate_id: localitateId,
+      tip_alerta: 'Verificare necesară',
+      titlu: `${info.total} reguli de confirmat: ${numeLoc(localitateId)}`,
+      descriere:
+        'Detaliile pe regulă sunt în coada „Verificări necesare” de pe Prezentare. O alertă agregată înlocuiește zgomotul pe fiecare rând „De confirmat”.',
+      severitate: esteP1(localitateId) ? 'Ridicată' : 'Medie',
+      este_demo: false,
+    });
+  });
+
+  detecteazaSuprapuneri(reguli.filter((r) => !r.este_demo && r.incredere === 'Confirmat')).forEach((avertisment) => {
     const regula = reguli.find((r) => r.id === avertisment.reguli[0]);
     if (!regula) return;
     adauga({
@@ -472,71 +593,53 @@ export function construiesteAlerte({ localitati = [], reguli = [], zone = [], su
           este_demo: false,
         });
       }
-      if (!l.ultima_verificare) {
+      // Doar P1 fără dată de verificare — restul e în coada Prezentare.
+      if (l.prioritate === 'P1' && !l.ultima_verificare) {
         adauga({
           localitate_id: l.id,
           tip_alerta: 'Verificare necesară',
-          titlu: `Localitate neverificată: ${l.nume}`,
-          descriere: 'Nu există o dată a ultimei verificări pentru această localitate.',
+          titlu: `Localitate P1 neverificată: ${l.nume}`,
+          descriere: 'Nu există o dată a ultimei verificări pentru această localitate prioritară.',
           severitate: 'Medie',
           este_demo: false,
         });
       }
     });
 
+  // Geometrii: agregat pe localitate, doar P1 (majoritatea UAT-urilor n-au încă GeoJSON).
+  const geoProbleme = new Map();
   zone
-    .filter((z) => !z.este_demo && !z.archived)
+    .filter((z) => !z.este_demo && !z.archived && esteP1(z.localitate_id))
     .forEach((z) => {
-      const referinta = `„${z.nume_zona}” (${numeLoc(z.localitate_id)})`;
-      if (esteGol(z.geometrie_geojson)) {
-        adauga({
-          localitate_id: z.localitate_id,
-          tip_alerta: 'Geometrie de reverificat',
-          titlu: `Geometrie lipsă: ${referinta}`,
-          descriere: 'Zona nu are geometrie GeoJSON, deci nu poate fi afișată pe hartă.',
-          severitate: 'Medie',
-          este_demo: false,
-        });
-      } else if (z.status_geometrie !== 'Confirmată') {
-        adauga({
-          localitate_id: z.localitate_id,
-          tip_alerta: 'Geometrie de reverificat',
-          titlu: `Geometrie de verificat: ${referinta}`,
-          descriere: `Statusul geometriei este „${z.status_geometrie || 'Neverificată'}”.`,
-          severitate: 'Medie',
-          este_demo: false,
-        });
-      } else {
+      let motiv = null;
+      if (esteGol(z.geometrie_geojson)) motiv = 'lipsă';
+      else if (z.status_geometrie !== 'Confirmată') motiv = 'neverificată';
+      else {
         const luni = luniDeLa(z.data_verificare_geometrie);
-        if (luni === null || luni >= PRAG_REVERIFICARE_LUNI) {
-          adauga({
-            localitate_id: z.localitate_id,
-            tip_alerta: 'Geometrie de reverificat',
-            titlu: `Geometrie învechită: ${referinta}`,
-            descriere: 'Geometria nu a fost reverificată în ultimele 12 luni.',
-            severitate: 'Medie',
-            este_demo: false,
-          });
-        }
+        if (luni === null || luni >= PRAG_REVERIFICARE_LUNI) motiv = 'învechită';
       }
+      if (!motiv) return;
+      const prev = geoProbleme.get(z.localitate_id) || { total: 0, motive: new Set() };
+      prev.total += 1;
+      prev.motive.add(motiv);
+      geoProbleme.set(z.localitate_id, prev);
     });
+
+  geoProbleme.forEach((info, localitateId) => {
+    adauga({
+      localitate_id: localitateId,
+      tip_alerta: 'Geometrie de reverificat',
+      titlu: `${info.total} zone fără hartă utilă: ${numeLoc(localitateId)}`,
+      descriere: `Probleme: ${[...info.motive].join(', ')}. Detaliile pe zonă rămân în registrul localității.`,
+      severitate: 'Medie',
+      este_demo: false,
+    });
+  });
 
   surse
     .filter((s) => !s.este_demo)
     .forEach((s) => {
       const referinta = `„${s.titlu_document}” (${numeLoc(s.localitate_id)})`;
-      const luni = luniDeLa(s.data_verificare);
-      if (luni === null || luni >= PRAG_REVERIFICARE_LUNI) {
-        adauga({
-          localitate_id: s.localitate_id,
-          sursa_act_id: s.id,
-          tip_alerta: 'Verificare necesară',
-          titlu: `Sursă de reverificat: ${referinta}`,
-          descriere: 'Documentul nu a fost verificat în ultimele 12 luni.',
-          severitate: 'Medie',
-          este_demo: false,
-        });
-      }
       const expirat = s.status_act === 'Expirat' || (s.data_expirare && s.data_expirare < astazi);
       if (expirat) {
         adauga({
@@ -547,6 +650,21 @@ export function construiesteAlerte({ localitati = [], reguli = [], zone = [], su
           descriere: 'Documentul normativ este expirat sau a depășit data de expirare.',
           severitate: 'Ridicată',
           data_scadenta: s.data_expirare,
+          este_demo: false,
+        });
+        return;
+      }
+      // Reverificare periodică doar pe P1 — evită sute de alerte pe lotul „de confirmat”.
+      if (!esteP1(s.localitate_id)) return;
+      const luni = luniDeLa(s.data_verificare);
+      if (luni === null || luni >= PRAG_REVERIFICARE_LUNI) {
+        adauga({
+          localitate_id: s.localitate_id,
+          sursa_act_id: s.id,
+          tip_alerta: 'Verificare necesară',
+          titlu: `Sursă de reverificat: ${referinta}`,
+          descriere: 'Documentul P1 nu a fost verificat în ultimele 12 luni.',
+          severitate: 'Medie',
           este_demo: false,
         });
       }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '@/api/client';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -8,8 +8,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { STATUSURI_GEOMETRIE, TIPURI_ZONA } from '@/lib/enum';
-import { laNumar } from '@/lib/format';
+import { faraDiacritice, laNumar } from '@/lib/format';
 import { valideazaGeoJSON } from '@/lib/reguliTaxe';
+import { cn } from '@/lib/utils';
+
+/** Nume canonic când regula/geometria acoperă tot orașul — nu se repetă numele localității. */
+export const NUME_ZONA_INTREAGA = 'Întreaga localitate';
 
 const GOL = {
   localitate_id: '',
@@ -27,33 +31,78 @@ const GOL = {
   data_verificare_geometrie: '',
 };
 
+function esteNumeIntreaga(nume) {
+  return faraDiacritice(nume) === faraDiacritice(NUME_ZONA_INTREAGA);
+}
+
 export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId, localitati = [], onSalvat }) {
   const { toast } = useToast();
   const [form, setForm] = useState(GOL);
+  /** 'intreaga' = acoperă tot orașul; 'distincta' = subzonă cu nume propriu (A, B, centru…) */
+  const [scop, setScop] = useState('intreaga');
   const [eroare, setEroare] = useState('');
   const [seSalveaza, setSeSalveaza] = useState(false);
+
+  // Din listă / fișă localitate: orașul e deja ales — nu îl re-selectezi ca pe o zonă.
+  const localitateBlocata = Boolean(localitateId) || localitati.length === 1;
+  const localitateSelectata = useMemo(
+    () => localitati.find((l) => l.id === form.localitate_id) || null,
+    [localitati, form.localitate_id]
+  );
 
   useEffect(() => {
     if (!open) return;
     setEroare('');
     if (zona) {
-      setForm(
-        Object.fromEntries(
-          Object.keys(GOL).map((k) => [k, zona[k] === null || zona[k] === undefined ? '' : zona[k]])
-        )
+      const next = Object.fromEntries(
+        Object.keys(GOL).map((k) => [k, zona[k] === null || zona[k] === undefined ? '' : zona[k]])
       );
+      setForm(next);
+      setScop(esteNumeIntreaga(zona.nume_zona) ? 'intreaga' : 'distincta');
     } else {
-      setForm({ ...GOL, localitate_id: localitateId || '' });
+      setForm({
+        ...GOL,
+        localitate_id: localitateId || '',
+        nume_zona: NUME_ZONA_INTREAGA,
+      });
+      setScop('intreaga');
     }
   }, [open, zona, localitateId]);
 
   const seteaza = (camp, valoare) => setForm((f) => ({ ...f, [camp]: valoare }));
 
+  const schimbaScop = (nou) => {
+    setScop(nou);
+    if (nou === 'intreaga') {
+      seteaza('nume_zona', NUME_ZONA_INTREAGA);
+    } else if (esteNumeIntreaga(form.nume_zona) || !form.nume_zona.trim()) {
+      seteaza('nume_zona', '');
+    }
+  };
+
   const salveaza = async () => {
-    if (!form.nume_zona.trim() || !form.localitate_id) {
-      setEroare('Localitatea și denumirea zonei sunt obligatorii.');
+    if (!form.localitate_id) {
+      setEroare('Selectează localitatea (orașul) pentru care definești zona.');
       return;
     }
+
+    let nume = form.nume_zona.trim();
+    if (scop === 'intreaga') {
+      nume = NUME_ZONA_INTREAGA;
+    }
+    if (!nume) {
+      setEroare('Pentru o zonă distinctă, completează denumirea (ex.: Zona A, Centru).');
+      return;
+    }
+
+    const numeLoc = localitateSelectata?.nume || '';
+    if (numeLoc && faraDiacritice(nume) === faraDiacritice(numeLoc)) {
+      setEroare(
+        `Denumirea zonei nu trebuie să fie același cu localitatea („${numeLoc}”). Alege „Întreaga localitate” sau un nume de subzonă (Zona A, Centru…).`
+      );
+      return;
+    }
+
     if (form.geometrie_geojson && form.geometrie_geojson.trim()) {
       const validare = valideazaGeoJSON(form.geometrie_geojson);
       if (!validare.ok) {
@@ -61,9 +110,10 @@ export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId,
         return;
       }
     }
+
     const payload = {
       localitate_id: form.localitate_id,
-      nume_zona: form.nume_zona.trim(),
+      nume_zona: nume,
       cod_zona: form.cod_zona || null,
       descriere: form.descriere || null,
       tip_zona: form.tip_zona,
@@ -95,9 +145,10 @@ export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId,
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{zona ? 'Editează zona' : 'Adaugă o zonă'}</DialogTitle>
-          <DialogDescription>
-            Geometria se introduce în format GeoJSON (Polygon sau MultiPolygon). Nu inventa limite — folosește geometria
-            oficială furnizată de autoritate.
+          <DialogDescription className="text-slate-700">
+            <span className="font-medium text-slate-800">Localitatea</span> e orașul din catalog.{' '}
+            <span className="font-medium text-slate-800">Zona</span> e o porțiune din acel oraș (sau tot orașul), cu
+            geometrie și reguli proprii — nu rescrie numele localității la denumirea zonei.
           </DialogDescription>
         </DialogHeader>
 
@@ -108,31 +159,97 @@ export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId,
         ) : null}
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Localitate (oraș) *</Label>
+            {localitateBlocata ? (
+              <Input
+                value={localitateSelectata ? `${localitateSelectata.nume}${localitateSelectata.judet ? ` · ${localitateSelectata.judet}` : ''}` : '—'}
+                readOnly
+                className="bg-slate-100 font-medium text-slate-900"
+              />
+            ) : (
+              <Select value={form.localitate_id || undefined} onValueChange={(v) => seteaza('localitate_id', v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selectează localitatea" />
+                </SelectTrigger>
+                <SelectContent>
+                  {localitati.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.nume}
+                      {l.judet ? ` · ${l.judet}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <div className="sm:col-span-2 rounded-lg border-2 border-slate-300 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-800">Acoperire zonă</p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => schimbaScop('intreaga')}
+                className={cn(
+                  'flex-1 rounded-md border-2 px-3 py-2.5 text-left text-sm transition-colors',
+                  scop === 'intreaga'
+                    ? 'border-blue-700 bg-blue-50 text-blue-950'
+                    : 'border-slate-300 bg-white text-slate-800 hover:border-slate-400'
+                )}
+              >
+                <span className="block font-semibold">Întreaga localitate</span>
+                <span className="mt-0.5 block text-xs text-slate-700">
+                  Taxă / geometrie pentru tot orașul
+                  {localitateSelectata ? ` (${localitateSelectata.nume})` : ''}.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => schimbaScop('distincta')}
+                className={cn(
+                  'flex-1 rounded-md border-2 px-3 py-2.5 text-left text-sm transition-colors',
+                  scop === 'distincta'
+                    ? 'border-blue-700 bg-blue-50 text-blue-950'
+                    : 'border-slate-300 bg-white text-slate-800 hover:border-slate-400'
+                )}
+              >
+                <span className="block font-semibold">Zonă distinctă</span>
+                <span className="mt-0.5 block text-xs text-slate-700">
+                  Subzonă cu nume propriu — ex. Zona A, Centru, Interzis greu.
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="sm:col-span-2">
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">
+              {scop === 'intreaga' ? 'Denumirea zonei (automat)' : 'Denumirea zonei *'}
+            </Label>
+            <Input
+              value={scop === 'intreaga' ? NUME_ZONA_INTREAGA : form.nume_zona}
+              onChange={(e) => seteaza('nume_zona', e.target.value)}
+              readOnly={scop === 'intreaga'}
+              disabled={scop === 'intreaga'}
+              placeholder="Ex.: Zona A, Centru istoric, Interzis tranzit greu…"
+              className={cn(scop === 'intreaga' && 'bg-slate-100')}
+            />
+            {scop === 'distincta' && localitateSelectata ? (
+              <p className="mt-1 text-[11px] text-slate-700">
+                Nu folosi „{localitateSelectata.nume}” aici — asta e deja localitatea.
+              </p>
+            ) : null}
+          </div>
+
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Localitate *</Label>
-            <Select value={form.localitate_id || undefined} onValueChange={(v) => seteaza('localitate_id', v)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selectează localitatea" />
-              </SelectTrigger>
-              <SelectContent>
-                {localitati.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.nume}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Cod zonă</Label>
+            <Input
+              value={form.cod_zona}
+              onChange={(e) => seteaza('cod_zona', e.target.value)}
+              placeholder="Opțional — ex. Z1, A"
+            />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Denumirea zonei *</Label>
-            <Input value={form.nume_zona} onChange={(e) => seteaza('nume_zona', e.target.value)} />
-          </div>
-          <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Cod zonă</Label>
-            <Input value={form.cod_zona} onChange={(e) => seteaza('cod_zona', e.target.value)} />
-          </div>
-          <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Tip zonă</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Tip zonă</Label>
             <Select value={form.tip_zona} onValueChange={(v) => seteaza('tip_zona', v)}>
               <SelectTrigger>
                 <SelectValue />
@@ -147,7 +264,7 @@ export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId,
             </Select>
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Status geometrie</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Status geometrie</Label>
             <Select value={form.status_geometrie} onValueChange={(v) => seteaza('status_geometrie', v)}>
               <SelectTrigger>
                 <SelectValue />
@@ -162,41 +279,41 @@ export default function ZonaFormDialog({ open, onOpenChange, zona, localitateId,
             </Select>
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Data verificării geometriei</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Data verificării geometriei</Label>
             <Input type="date" value={form.data_verificare_geometrie} onChange={(e) => seteaza('data_verificare_geometrie', e.target.value)} />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Centru — latitudine</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Centru — latitudine</Label>
             <Input value={form.centru_latitudine} onChange={(e) => seteaza('centru_latitudine', e.target.value)} />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Centru — longitudine</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Centru — longitudine</Label>
             <Input value={form.centru_longitudine} onChange={(e) => seteaza('centru_longitudine', e.target.value)} />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Valabil de la</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Valabil de la</Label>
             <Input type="date" value={form.valabil_de} onChange={(e) => seteaza('valabil_de', e.target.value)} />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Valabil până la</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Valabil până la</Label>
             <Input type="date" value={form.valabil_pana} onChange={(e) => seteaza('valabil_pana', e.target.value)} />
           </div>
           <div className="sm:col-span-2">
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">URL sursă geometrie</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">URL sursă geometrie</Label>
             <Input value={form.sursa_geometrie_url} onChange={(e) => seteaza('sursa_geometrie_url', e.target.value)} placeholder="https://…" />
           </div>
           <div className="sm:col-span-2">
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Geometrie GeoJSON</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Geometrie GeoJSON</Label>
             <Textarea
               value={form.geometrie_geojson}
               onChange={(e) => seteaza('geometrie_geojson', e.target.value)}
               rows={5}
               className="font-mono text-xs"
-              placeholder='{"type":"Polygon","coordinates":[[[26.10,44.43],[26.12,44.43],[26.12,44.45],[26.10,44.45],[26.10,44.43]]]}'
+              placeholder='Polygon / MultiPolygon din actul oficial (lipește GeoJSON-ul aici)'
             />
           </div>
           <div className="sm:col-span-2">
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Descriere</Label>
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Descriere</Label>
             <Textarea value={form.descriere} onChange={(e) => seteaza('descriere', e.target.value)} rows={2} />
           </div>
         </div>

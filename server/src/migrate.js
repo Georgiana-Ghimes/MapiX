@@ -3,6 +3,8 @@ import { pool } from './db.js';
 
 const STATEMENTS = [
   `CREATE EXTENSION IF NOT EXISTS "pgcrypto"`,
+  // Diacritic-insensitive text search (Bucuresti ≈ București) for entity $regex filters
+  `CREATE EXTENSION IF NOT EXISTS "unaccent"`,
 
   `CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

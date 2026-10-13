@@ -40,7 +40,9 @@ export default function HartaLeaflet({
   }, [zone]);
 
   return (
-    <div className="h-[520px] w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 lg:h-[620px]">
+    // isolate: Leaflet panes/controls use z-index 400–1000; keep them inside this
+    // stacking context so Radix Select (z-50 portal) stays above the map.
+    <div className="relative z-0 isolate h-[520px] w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 lg:h-[620px]">
       <MapContainer key={`${centru[0]}-${centru[1]}`} center={centru} zoom={zoom} className="h-full w-full" scrollWheelZoom>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'

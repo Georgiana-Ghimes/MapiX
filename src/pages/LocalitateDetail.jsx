@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { CalendarCheck, ExternalLink, FileText, MapPin, Pencil, Plus } from 'lucide-react';
+import { CalendarCheck, ExternalLink, FileText, MapPin, Pencil, Plus, Search } from 'lucide-react';
 import { api } from '@/api/client';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -10,6 +10,8 @@ import StareEroare from '@/components/StareEroare';
 import HartaLeaflet from '@/components/HartaLeaflet';
 import LocalitateFormDialog from '@/components/LocalitateFormDialog';
 import ZonaFormDialog from '@/components/ZonaFormDialog';
+import ZonaDescriere from '@/components/ZonaDescriere';
+
 import TaxaFormDialog from '@/components/TaxaFormDialog';
 import SursaFormDialog from '@/components/SursaFormDialog';
 import RegulaDetaliiDialog from '@/components/RegulaDetaliiDialog';
@@ -93,22 +95,30 @@ export default function LocalitateDetail() {
         descriere={localitate.descriere || 'Detalii, reguli, zone și surse pentru această localitate.'}
         parinte={{ nume: 'Localități', cale: '/localitati' }}
         actiuni={
-          esteAdmin ? (
-            <>
-              <Button variant="outline" onClick={() => setDialog({ tip: 'localitate', item: localitate })}>
-                <Pencil className="mr-1.5 h-4 w-4" aria-hidden="true" />
-                Editează
-              </Button>
-              <Button variant="outline" onClick={() => setDialog({ tip: 'zona' })}>
-                <MapPin className="mr-1.5 h-4 w-4" aria-hidden="true" />
-                Adaugă zonă
-              </Button>
-              <Button onClick={() => setDialog({ tip: 'regula' })}>
-                <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
-                Adaugă regulă
-              </Button>
-            </>
-          ) : null
+          <>
+            <Button asChild variant="outline">
+              <Link to={`/cauta-taxe?q=${encodeURIComponent(localitate.nume)}`}>
+                <Search className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                Caută taxe
+              </Link>
+            </Button>
+            {esteAdmin ? (
+              <>
+                <Button variant="outline" onClick={() => setDialog({ tip: 'localitate', item: localitate })}>
+                  <Pencil className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                  Editează
+                </Button>
+                <Button variant="outline" onClick={() => setDialog({ tip: 'zona' })}>
+                  <MapPin className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                  Adaugă zonă
+                </Button>
+                <Button onClick={() => setDialog({ tip: 'regula' })}>
+                  <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                  Adaugă regulă
+                </Button>
+              </>
+            ) : null}
+          </>
         }
       />
 
@@ -237,22 +247,25 @@ export default function LocalitateDetail() {
               <HartaLeaflet localitati={[localitate]} zone={zone} centru={centru} zoom={12} />
               <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
                 {zone.map((z) => (
-                  <li key={z.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-slate-800">{z.nume_zona}</span>
-                      <span className="text-xs text-slate-500">
-                        {z.tip_zona} · geometrie: {valideazaGeoJSON(z.geometrie_geojson).ok ? 'disponibilă' : 'indisponibilă'} · verificată la{' '}
-                        {dataRo(z.data_verificare_geometrie)}
+                  <li key={z.id} className="space-y-2 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-slate-800">{z.nume_zona}</span>
+                        <span className="text-xs text-slate-500">
+                          {z.tip_zona} · geometrie: {valideazaGeoJSON(z.geometrie_geojson).ok ? 'disponibilă' : 'indisponibilă'} · verificată la{' '}
+                          {dataRo(z.data_verificare_geometrie)}
+                        </span>
                       </span>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <StatusBadge valoare={z.status_geometrie} />
-                      {esteAdmin ? (
-                        <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'zona', item: z })}>
-                          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                        </Button>
-                      ) : null}
-                    </span>
+                      <span className="flex items-center gap-2">
+                        <StatusBadge valoare={z.status_geometrie} />
+                        {esteAdmin ? (
+                          <Button size="sm" variant="ghost" onClick={() => setDialog({ tip: 'zona', item: z })}>
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                          </Button>
+                        ) : null}
+                      </span>
+                    </div>
+                    <ZonaDescriere zona={z} compact />
                   </li>
                 ))}
               </ul>
@@ -296,7 +309,7 @@ export default function LocalitateDetail() {
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 underline underline-offset-2"
                       >
-                        Deschide documentul
+                        {/\.pdf($|\?)/i.test(s.document_url) ? 'Vezi PDF' : 'Deschide documentul'}
                         <ExternalLink className="h-3 w-3" aria-hidden="true" />
                       </a>
                     ) : (

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BellRing, RefreshCw } from 'lucide-react';
 import { api } from '@/api/client';
 import PageHeader from '@/components/PageHeader';
@@ -6,6 +6,7 @@ import EmptyState from '@/components/EmptyState';
 import StareIncarcare from '@/components/StareIncarcare';
 import StareEroare from '@/components/StareEroare';
 import AlertaCard from '@/components/AlertaCard';
+import ListaJudetExpand from '@/components/ListaJudetExpand';
 import LocalitateSelect from '@/components/LocalitateSelect';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +14,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { azi, dataOraRo } from '@/lib/format';
+import { gruparePeJudet } from '@/lib/grupareJudet';
+import { PANEL, PANEL_FILTERS } from '@/lib/uiPanel';
+import { cn } from '@/lib/utils';
 import { construiesteAlerte } from '@/lib/reguliTaxe';
 import { SEVERITATI, STATUSURI_ALERTA } from '@/lib/enum';
 
@@ -30,126 +34,164 @@ const inBucati = (lista, dimensiune) => {
   return bucati;
 };
 
+async function stergeAlerteDeschise() {
+  const page = await api.entities.Alerta.filter(
+    { status: { $in: ['Nouă', 'În lucru'] } },
+    { limit: 2000, fields: ['id'] }
+  );
+  const ids = (page.items || []).map((a) => a.id).filter(Boolean);
+  for (const bucata of inBucati(ids, 40)) {
+    await Promise.all(bucata.map((id) => api.entities.Alerta.delete(id)));
+  }
+  return ids.length;
+}
+
 export default function Alerte() {
   const { toast } = useToast();
   const [alerte, setAlerte] = useState([]);
   const [localitati, setLocalitati] = useState([]);
-  const [seIncarca, setSeIncarca] = useState(true);
+  const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
+  const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [eroare, setEroare] = useState(null);
   const [filtre, setFiltre] = useState(FILTRE_GOL);
+  const [responsabilDebounced, setResponsabilDebounced] = useState('');
   const [seGenereaza, setSeGenereaza] = useState(false);
   const [ultimaGenerare, setUltimaGenerare] = useState(null);
-  const generatOdata = useRef(false);
 
-  const construiesteQuery = useCallback(() => {
+  useEffect(() => {
+    const t = setTimeout(() => setResponsabilDebounced(filtre.responsabil.trim()), 250);
+    return () => clearTimeout(t);
+  }, [filtre.responsabil]);
+
+  const filtreEfective = useMemo(
+    () => ({ ...filtre, responsabil: responsabilDebounced }),
+    [filtre.severitate, filtre.localitate, filtre.status, filtre.termen, responsabilDebounced]
+  );
+
+  const construiesteQuery = useCallback((f) => {
     const conditii = [];
-    if (filtre.status !== 'toate') conditii.push({ status: filtre.status });
-    if (filtre.severitate !== 'toate') conditii.push({ severitate: filtre.severitate });
-    if (filtre.localitate !== 'toate') conditii.push({ localitate_id: filtre.localitate });
-    if (filtre.responsabil.trim()) conditii.push({ responsabil: { $regex: filtre.responsabil.trim(), $options: 'i' } });
-    if (filtre.termen === 'depasit') conditii.push({ data_scadenta: { $lt: azi() } });
-    if (filtre.termen === 'curand') conditii.push({ data_scadenta: { $gte: azi(), $lte: pesteZile(30) } });
+    if (f.status !== 'toate') conditii.push({ status: f.status });
+    if (f.severitate !== 'toate') conditii.push({ severitate: f.severitate });
+    if (f.localitate !== 'toate') conditii.push({ localitate_id: f.localitate });
+    if (f.responsabil) conditii.push({ responsabil: { $regex: f.responsabil, $options: 'i' } });
+    if (f.termen === 'depasit') conditii.push({ data_scadenta: { $lt: azi() } });
+    if (f.termen === 'curand') conditii.push({ data_scadenta: { $gte: azi(), $lte: pesteZile(30) } });
     if (conditii.length === 0) return {};
     if (conditii.length === 1) return conditii[0];
     return { $and: conditii };
-  }, [filtre]);
-
-  const incarca = useCallback(async () => {
-    setSeIncarca(true);
-    setEroare(null);
-    try {
-      const [pageAlerte, pageLocalitati] = await Promise.all([
-        api.entities.Alerta.filter(construiesteQuery(), { sort: '-data_generare', limit: 300 }),
-        api.entities.Localitate.filter({ archived: { $ne: true } }, { sort: 'nume', limit: 500, fields: ['nume'] }),
-      ]);
-      setAlerte(pageAlerte.items || []);
-      setLocalitati(pageLocalitati.items || []);
-    } catch (e) {
-      setEroare(e.message || 'Nu am putut încărca alertele.');
-    } finally {
-      setSeIncarca(false);
-    }
-  }, [construiesteQuery]);
-
-  const genereaza = useCallback(
-    async (silentios = false) => {
-      setSeGenereaza(true);
-      try {
-        const [pageLocalitati, pageReguli, pageZone, pageSurse, pageAlerte] = await Promise.all([
-          api.entities.Localitate.filter({}, { limit: 500 }),
-          api.entities.TaxaAcces.filter({}, { limit: 1000 }),
-          api.entities.Zona.filter({}, { limit: 500 }),
-          api.entities.SursaAct.filter({}, { limit: 500 }),
-          api.entities.Alerta.filter({}, { limit: 1000, fields: ['tip_alerta', 'taxa_id', 'sursa_act_id', 'localitate_id', 'titlu', 'status'] }),
-        ]);
-
-        const candidate = construiesteAlerte({
-          localitati: pageLocalitati.items || [],
-          reguli: pageReguli.items || [],
-          zone: pageZone.items || [],
-          surse: pageSurse.items || [],
-          existente: pageAlerte.items || [],
-        });
-
-        if (candidate.length) {
-          for (const bucata of inBucati(candidate, 200)) {
-            await api.entities.Alerta.bulkCreate(bucata);
-          }
-        }
-        setUltimaGenerare(new Date().toISOString());
-        if (!silentios) {
-          toast({
-            title: candidate.length ? `${candidate.length} alerte noi generate` : 'Nu au apărut alerte noi',
-            description: 'Alertele provin din datele existente: expirări, verificări lipsă, geometrii și surse neactualizate.',
-          });
-        }
-        if (!silentios || candidate.length) await incarca();
-      } catch (e) {
-        if (!silentios) toast({ title: 'Generarea alertelor nu a reușit', description: e.message, variant: 'destructive' });
-      } finally {
-        setSeGenereaza(false);
-      }
-    },
-    [incarca, toast]
-  );
-
-  useEffect(() => {
-    incarca();
-     
-  }, [filtre]);
-
-  useEffect(() => {
-    if (generatOdata.current) return;
-    generatOdata.current = true;
-    genereaza(true);
-     
   }, []);
 
-  const numeLocalitate = (id) => localitati.find((l) => l.id === id)?.nume;
+  const incarca = useCallback(
+    async ({ initial = false } = {}) => {
+      if (initial) {
+        setSeIncarcaInitial(true);
+        setEroare(null);
+      } else setSeFiltreaza(true);
+      try {
+        const [pageAlerte, pageLocalitati] = await Promise.all([
+          api.entities.Alerta.filter(construiesteQuery(filtreEfective), { sort: '-data_generare', limit: 300 }),
+          api.entities.Localitate.filter(
+            { archived: { $ne: true } },
+            { sort: 'nume', limit: 500, fields: ['nume', 'judet', 'prioritate'] }
+          ),
+        ]);
+        setAlerte(pageAlerte.items || []);
+        setLocalitati(pageLocalitati.items || []);
+        setEroare(null);
+      } catch (e) {
+        setEroare(e.message || 'Nu am putut încărca alertele.');
+      } finally {
+        setSeIncarcaInitial(false);
+        setSeFiltreaza(false);
+      }
+    },
+    [construiesteQuery, filtreEfective]
+  );
 
-  if (seIncarca) return <StareIncarcare mesaj="Se încarcă alertele…" />;
-  if (eroare) return <StareEroare mesaj={eroare} onReincearca={incarca} />;
+  const genereaza = useCallback(async () => {
+    setSeGenereaza(true);
+    try {
+      const sterse = await stergeAlerteDeschise();
+
+      const [pageLocalitati, pageReguli, pageZone, pageSurse] = await Promise.all([
+        api.entities.Localitate.filter({}, { limit: 500 }),
+        api.entities.TaxaAcces.filter({}, { limit: 2000 }),
+        api.entities.Zona.filter({}, { limit: 500 }),
+        api.entities.SursaAct.filter({}, { limit: 500 }),
+      ]);
+
+      const candidate = construiesteAlerte({
+        localitati: pageLocalitati.items || [],
+        reguli: pageReguli.items || [],
+        zone: pageZone.items || [],
+        surse: pageSurse.items || [],
+        existente: [],
+      });
+
+      if (candidate.length) {
+        for (const bucata of inBucati(candidate, 200)) {
+          await api.entities.Alerta.bulkCreate(bucata);
+        }
+      }
+      setUltimaGenerare(new Date().toISOString());
+      toast({
+        title: `${candidate.length} alerte regenerate`,
+        description:
+          sterse > 0
+            ? `Am înlocuit ${sterse} alerte deschise cu un set agregat (fără o alertă per regulă „De confirmat”).`
+            : 'Alertele acoperă expirări, P1 incomplet și agregate pe localitate pentru coada de verificare.',
+      });
+      await incarca();
+    } catch (e) {
+      toast({ title: 'Generarea alertelor nu a reușit', description: e.message, variant: 'destructive' });
+    } finally {
+      setSeGenereaza(false);
+    }
+  }, [incarca, toast]);
+
+  useEffect(() => {
+    incarca({ initial: seIncarcaInitial && alerte.length === 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtreEfective]);
+
+  const metaLocalitate = (id) => localitati.find((l) => l.id === id);
+  const numeLocalitate = (id) => metaLocalitate(id)?.nume;
+
+  const alertePeJudet = useMemo(
+    () =>
+      gruparePeJudet(alerte, {
+        getJudet: (a) => metaLocalitate(a.localitate_id)?.judet,
+        getLocId: (a) => a.localitate_id,
+        getLocNume: (a) => numeLocalitate(a.localitate_id) || 'Fără localitate',
+        getPrioritate: (a) => metaLocalitate(a.localitate_id)?.prioritate,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [alerte, localitati]
+  );
+
+  if (seIncarcaInitial) return <StareIncarcare mesaj="Se încarcă alertele…" />;
+  if (eroare && alerte.length === 0) return <StareEroare mesaj={eroare} onReincearca={() => incarca({ initial: true })} />;
 
   return (
     <div>
       <PageHeader
         titlu="Alerte și verificări"
-        descriere="Listă operațională pentru întreținerea datelor: expirări, verificări lipsă, geometrii de reverificat și reguli contradictorii."
+        descriere="Listă operațională: expirări, localități P1 incomplete, geometrii P1 și agregate pe localitate pentru regulile de confirmat."
         actiuni={
-          <Button onClick={() => genereaza(false)} disabled={seGenereaza}>
+          <Button onClick={genereaza} disabled={seGenereaza}>
             <RefreshCw className={`mr-1.5 h-4 w-4 ${seGenereaza ? 'animate-spin' : ''}`} aria-hidden="true" />
-            {seGenereaza ? 'Se generează…' : 'Generează alerte din datele curente'}
+            {seGenereaza ? 'Se regenerează…' : 'Regenerează alertele'}
           </Button>
         }
       />
 
       <p className="mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
-        Alertele sunt calculate din datele existente în aplicație, la deschiderea paginii și la cerere. Aplicația nu monitorizează
-        site-urile primăriilor și nu detectează automat toate modificările legislative.
-        {ultimaGenerare ? ` Ultima generare: ${dataOraRo(ultimaGenerare)}.` : ''}
+        Regenerarea înlocuiește alertele deschise (Nouă / În lucru) cu un set controlat — fără sute de duplicate pe
+        „De confirmat”. Coada detaliată rămâne pe Prezentare. Aplicația nu monitorizează site-urile primăriilor.
+        {ultimaGenerare ? ` Ultima regenerare: ${dataOraRo(ultimaGenerare)}.` : ''}
       </p>
 
-      <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className={cn(PANEL_FILTERS, 'sm:grid-cols-2 lg:grid-cols-5')}>
         <div>
           <Label className="mb-1.5 block text-xs font-medium text-slate-600">Severitate</Label>
           <Select value={filtre.severitate} onValueChange={(v) => setFiltre((f) => ({ ...f, severitate: v }))}>
@@ -210,34 +252,43 @@ export default function Alerte() {
         </div>
       </div>
 
+      <div className={seFiltreaza ? 'opacity-60 transition-opacity' : undefined} aria-busy={seFiltreaza || undefined}>
       {alerte.length === 0 ? (
         <EmptyState
           icon={BellRing}
           titlu="Nu există alerte pentru filtrele selectate"
-          descriere="Alertele apar când există expirări, verificări lipsă, geometrii de reverificat sau reguli suprapuse. Poți genera din nou alertele din datele curente."
+          descriere="Generează alerte din datele curente (set agregat) sau schimbă filtrele. Expirările și P1 incomplete apar aici; coada pe regulă e pe Prezentare."
           actiune={
-            <Button variant="outline" onClick={() => genereaza(false)} disabled={seGenereaza}>
-              Generează alerte
+            <Button variant="outline" onClick={genereaza} disabled={seGenereaza}>
+              Regenerează alertele
             </Button>
           }
         />
       ) : (
-        <div className="space-y-3">
-          {alerte.map((alerta) => (
-            <AlertaCard key={alerta.id} alerta={alerta} numeLocalitate={numeLocalitate(alerta.localitate_id)} onActualizat={incarca} />
-          ))}
-        </div>
+        <ListaJudetExpand
+          judete={alertePeJudet}
+          etichetaItems="alerte"
+          itemClassName=""
+          renderItem={(alerta) => (
+            <AlertaCard
+              alerta={alerta}
+              numeLocalitate={numeLocalitate(alerta.localitate_id)}
+              onActualizat={() => incarca()}
+            />
+          )}
+        />
       )}
+      </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="font-heading text-sm font-semibold text-slate-700">Tipuri de alerte generate</h2>
+      <div className={cn(PANEL, 'mt-6 p-4')}>
+        <h2 className="font-heading text-sm font-semibold text-slate-700">Ce generează acum</h2>
         <ul className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
-          <li>· Taxă care se apropie de expirare sau este expirată</li>
-          <li>· Sursă care necesită reverificare</li>
-          <li>· Sursă oficială lipsă sau link de document lipsă</li>
-          <li>· Geometrie lipsă, neverificată sau învechită</li>
-          <li>· Reguli suprapuse sau contradictorii</li>
-          <li>· Localitate prioritară cu acoperire incompletă</li>
+          <li>· Taxă / act expirat sau aproape de expirare</li>
+          <li>· Agregat pe localitate pentru reguli „De confirmat”</li>
+          <li>· Lipsuri pe reguli Confirmate (sursă / dată verificare)</li>
+          <li>· Geometrie agregată doar pentru localități P1</li>
+          <li>· Reguli Confirmate suprapuse</li>
+          <li>· Localitate P1 cu acoperire incompletă</li>
         </ul>
       </div>
     </div>

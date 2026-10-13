@@ -3,9 +3,11 @@ import { ExternalLink } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/StatusBadge';
+import ZonaDescriere from '@/components/ZonaDescriere';
 import { dataRo, masaRo, sumaRo, textSau } from '@/lib/format';
 import { PRAG_REVERIFICARE_LUNI } from '@/lib/reguliTaxe';
 import { luniDeLa } from '@/lib/format';
+
 
 function Rand({ eticheta, children }) {
   return (
@@ -39,7 +41,10 @@ export default function RegulaDetaliiDialog({ open, onOpenChange, regula, locali
           {regula.este_demo ? <StatusBadge valoare="DEMO — DATE FICTIVE" /> : null}
         </div>
 
+        <ZonaDescriere zona={zona} className="mb-3" />
+
         <dl className="rounded-md border border-slate-200 px-4 py-1">
+          <Rand eticheta="Zonă">{zona ? zona.nume_zona : 'Fără zonă definită'}</Rand>
           <Rand eticheta="Criteriu de masă">
             {regula.tip_masa || 'Necunoscut'}
             {regula.masa_min_t || regula.masa_max_t
@@ -96,7 +101,7 @@ export default function RegulaDetaliiDialog({ open, onOpenChange, regula, locali
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 underline underline-offset-2 hover:text-blue-800"
             >
-              Deschide sursa oficială
+              {/\.pdf($|\?)/i.test(regula.sursa_url) ? 'Vezi PDF regulament' : 'Deschide sursa oficială'}
               <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
             </a>
           ) : (

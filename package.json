@@ -1,8 +1,8 @@
 {
   "name": "mvp",
   "private": true,
-  "version": "0.3.0",
-  "build": 3,
+  "version": "0.4.0",
+  "build": 39,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,7 +19,8 @@
     "db:import-safe": "npm run import-safe --prefix server",
     "db:import-safe:force": "npm run import-safe:force --prefix server",
     "db:import-queue": "npm run import-queue --prefix server",
-    "db:import-queue:force": "npm run import-queue:force --prefix server"
+    "db:import-queue:force": "npm run import-queue:force --prefix server",
+    "db:import-bragadiru": "npm run import-bragadiru --prefix server"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

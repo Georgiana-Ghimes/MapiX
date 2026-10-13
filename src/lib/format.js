@@ -101,15 +101,26 @@ export function textSau(v, fallback = 'Necompletat') {
   return esteGol(v) ? fallback : v;
 }
 
-export function slugDin(text) {
-  return String(text || '')
-    .toLowerCase()
-    .replace(/[ăâ]/g, 'a')
-    .replace(/î/g, 'i')
-    .replace(/ș/g, 's')
-    .replace(/ț/g, 't')
+/** Lowercase ASCII-ish form for diacritic-insensitive compare (Bucuresti ≈ București). */
+export function faraDiacritice(text) {
+  return String(text ?? '')
+    .replace(/[ăâ]/gi, 'a')
+    .replace(/î/gi, 'i')
+    .replace(/[șş]/gi, 's')
+    .replace(/[țţ]/gi, 't')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+export function contineFaraDiacritice(haystack, needle) {
+  const n = faraDiacritice(needle).trim();
+  if (!n) return true;
+  return faraDiacritice(haystack).includes(n);
+}
+
+export function slugDin(text) {
+  return faraDiacritice(text)
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 }

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast';
 import { PRIORITATI, STATUSURI_ACOPERIRE, STATUSURI_REGLEMENTARE, TIP_LOCALITATE } from '@/lib/enum';
 import { laNumar, slugDin } from '@/lib/format';
+import { JUDETE_RO, esteJudetRo } from '@/lib/judeteRo';
 
 const GOL = {
   nume: '',
@@ -50,10 +51,14 @@ export default function LocalitateFormDialog({ open, onOpenChange, localitate, o
       setEroare('Denumirea localității este obligatorie.');
       return;
     }
+    if (!esteJudetRo(form.judet)) {
+      setEroare('Selectează un județ valid din România (inclusiv București).');
+      return;
+    }
     const payload = {
       nume: form.nume.trim(),
       slug: slugDin(form.nume),
-      judet: form.judet || null,
+      judet: form.judet.trim(),
       tip_localitate: form.tip_localitate,
       prioritate: form.prioritate,
       status_acoperire: form.status_acoperire,
@@ -101,8 +106,22 @@ export default function LocalitateFormDialog({ open, onOpenChange, localitate, o
             <Input value={form.nume} onChange={(e) => seteaza('nume', e.target.value)} placeholder="Ex.: Otopeni" />
           </div>
           <div>
-            <Label className="mb-1.5 block text-xs font-medium text-slate-600">Județ</Label>
-            <Input value={form.judet} onChange={(e) => seteaza('judet', e.target.value)} placeholder="Ex.: Ilfov" />
+            <Label className="mb-1.5 block text-xs font-medium text-slate-800">Județ *</Label>
+            <Select
+              value={esteJudetRo(form.judet) ? form.judet : undefined}
+              onValueChange={(v) => seteaza('judet', v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selectează județul" />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {JUDETE_RO.map((j) => (
+                  <SelectItem key={j} value={j}>
+                    {j}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label className="mb-1.5 block text-xs font-medium text-slate-600">Tip localitate</Label>

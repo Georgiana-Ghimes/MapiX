@@ -11,9 +11,20 @@ import {
   projectFields,
   serializeRow,
 } from '../entities.js';
+import { esteJudetRo } from '../judeteRo.js';
 
 const router = Router();
 router.use(authRequired);
+
+function valideazaLocalitate(data, { obligatoriu = false } = {}) {
+  if (obligatoriu && (data.judet == null || String(data.judet).trim() === '')) {
+    return 'Județul este obligatoriu.';
+  }
+  if (data.judet != null && String(data.judet).trim() !== '' && !esteJudetRo(data.judet)) {
+    return 'Județ invalid. Alege un județ din România (sau București).';
+  }
+  return null;
+}
 
 function getCfg(name) {
   return ENTITY_MAP[name] || null;
@@ -230,6 +241,10 @@ router.post('/:entity', async (req, res) => {
     if (!adminWriteGuard(entity, req.user, res)) return;
 
     const data = pickWritable(cfg, req.body);
+    if (entity === 'Localitate') {
+      const errJudet = valideazaLocalitate(data, { obligatoriu: true });
+      if (errJudet) return res.status(400).json({ message: errJudet });
+    }
     data.created_by_id = req.user.id;
     const keys = Object.keys(data);
     const values = Object.values(data);
@@ -260,6 +275,14 @@ router.post('/:entity/bulk', async (req, res) => {
       const rows = [];
       for (const item of items) {
         const data = pickWritable(cfg, item);
+        if (entity === 'Localitate') {
+          const errJudet = valideazaLocalitate(data, { obligatoriu: true });
+          if (errJudet) {
+            const err = new Error(errJudet);
+            err.status = 400;
+            throw err;
+          }
+        }
         data.created_by_id = req.user.id;
         const keys = Object.keys(data);
         const values = Object.values(data);
@@ -277,7 +300,7 @@ router.post('/:entity/bulk', async (req, res) => {
     res.status(201).json(created);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: err.message || 'Bulk create failed' });
+    res.status(err.status || 500).json({ message: err.message || 'Bulk create failed' });
   }
 });
 
@@ -296,6 +319,10 @@ router.patch('/:entity/:id', async (req, res) => {
     }
 
     const data = pickWritable(cfg, req.body);
+    if (entity === 'Localitate' && Object.prototype.hasOwnProperty.call(data, 'judet')) {
+      const errJudet = valideazaLocalitate(data, { obligatoriu: true });
+      if (errJudet) return res.status(400).json({ message: errJudet });
+    }
     data.updated_at = new Date().toISOString();
     const keys = Object.keys(data);
     if (keys.length === 0) return res.json(serializeRow(row, entity));

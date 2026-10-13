@@ -1,9 +1,14 @@
 import './loadEnv.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import entityRoutes from './routes/entities.js';
 import { query } from './db.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const docsDir = path.resolve(__dirname, '../../public/docs');
 
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is required. Copy server/.env.example to server/.env');
@@ -28,6 +33,8 @@ function corsOriginOption() {
 
 app.use(cors({ origin: corsOriginOption(), credentials: true }));
 app.use(express.json({ limit: '2mb' }));
+// Acte scanate (PDF) — aceleași fișiere ca Vite `public/docs`
+app.use('/docs', express.static(docsDir, { fallthrough: true, maxAge: '7d' }));
 
 app.get('/api/health', async (_req, res) => {
   try {

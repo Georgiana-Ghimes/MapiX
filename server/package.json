@@ -1,6 +1,6 @@
 {
   "name": "mapix-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "import-safe": "node src/importSafeXlsx.js",
     "import-safe:force": "node src/importSafeXlsx.js --force",
     "import-queue": "node src/importResearchQueue.js",
-    "import-queue:force": "node src/importResearchQueue.js --force"
+    "import-queue:force": "node src/importResearchQueue.js --force",
+    "import-bragadiru": "node src/importBragadiruHcl41.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

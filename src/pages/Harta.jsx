@@ -9,7 +9,9 @@ import StareEroare from '@/components/StareEroare';
 import EmptyState from '@/components/EmptyState';
 import HartaLeaflet from '@/components/HartaLeaflet';
 import LocalitateSelect from '@/components/LocalitateSelect';
+import ZonaDescriere from '@/components/ZonaDescriere';
 import { Button } from '@/components/ui/button';
+
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -31,7 +33,7 @@ export default function Harta() {
   const [zone, setZone] = useState([]);
   const [seIncarca, setSeIncarca] = useState(true);
   const [eroare, setEroare] = useState(null);
-  const [localitateSelectata, setLocalitateSelectata] = useState('');
+  const [localitateSelectata, setLocalitateSelectata] = useState('toate');
   const [zonaSelectata, setZonaSelectata] = useState(null);
   const [reguliZona, setReguliZona] = useState([]);
   const [filtre, setFiltre] = useState({ tip_zona: 'toate', status_reglementare: 'toate', doarConfirmate: false, data: '' });
@@ -84,7 +86,7 @@ export default function Harta() {
     const idLocalitati = new Set(localitatiFiltrate.map((l) => l.id));
     return zone.filter((z) => {
       if (!idLocalitati.has(z.localitate_id)) return false;
-      if (localitateSelectata && z.localitate_id !== localitateSelectata) return false;
+      if (localitateSelectata && localitateSelectata !== 'toate' && z.localitate_id !== localitateSelectata) return false;
       if (filtre.tip_zona !== 'toate' && z.tip_zona !== filtre.tip_zona) return false;
       if (filtre.doarConfirmate && z.status_geometrie !== 'Confirmată') return false;
       return true;
@@ -245,7 +247,7 @@ export default function Harta() {
                   </dd>
                 </div>
               </dl>
-              {zonaSelectata.descriere ? <p className="mt-2 text-sm text-slate-600">{zonaSelectata.descriere}</p> : null}
+              <ZonaDescriere zona={zonaSelectata} className="mt-3" />
               {zonaSelectata.sursa_geometrie_url ? (
                 <a
                   href={zonaSelectata.sursa_geometrie_url}

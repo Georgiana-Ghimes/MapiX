@@ -33,10 +33,10 @@
 | UI: dashboard, caută taxe, hartă, cost cursă, registre, setări | Done | `src/pages/*` |
 | Import/export CSV | Done (UI) | Setări + `src/lib/csv.js` + `ImportCsv.jsx` |
 | Seed admin | Done | `npm run db:seed` → `admin@mapix.local` / `admin12345` |
-| Seed localități/taxe reale | **Lipsă** | `seed.js` creează doar admin |
+| Seed / import localități & taxe reale | **Parțial done** | `seed.js` = doar admin; date reale via `npm run db:import-safe` + `db:import-queue` din `data/research/*.xlsx` (în DB locală: ~14 Confirmate + coadă „De confirmat”) |
 | Email real (Resend etc.) | **Lipsă** | doar `console.log` OTP/reset/invite |
 | Google login | Stub | buton UI; `loginWithProvider` aruncă eroare; `GOOGLE_CLIENT_ID` în `.env.example` |
-| Docker / deploy docs | **Lipsă** | nici Docker, nici CI în repo |
+| Docker / deploy docs | **Lipsă** | Postgres local tipic via container `mapix-pg`; fără compose/CI deploy în repo |
 | Teste API | **Lipsă** | zero suite test |
 | Multi-tenant / org + flotă privată | **Parțial / fals** | câmpuri `nume_organizatie` pe **user**; catalog localități/taxe **global partajat** |
 | Sync automată surse oficiale | **Lipsă** | date manual / CSV |
@@ -65,13 +65,13 @@
 
 | | |
 | --- | --- |
-| **Status** | **Parțial done (12.10.2026)** — Geo nu pusese date; importate **14 localități + 189 reguli Confirmate din act** |
-| **Unde** | UI: `/localitati`, `/baza-taxe`, `/surse`. Script: `npm run db:import-safe` (`server/src/importSafeXlsx.js`) |
-| **Cum** | Citește xlsx research; filtrează status „Sume găsite, confirmate din act” + încredere tarif „confirmat din actul oficial”; `--force` reimportă |
-| **Resursă research** | `data/research/Taxe_acces_camioane_Romania.xlsx` (în repo; seed via `db:import-safe` / `db:import-queue`) |
-| **În DB acum** | București (26), Buftea (21), Satu Mare (21), Arad (20), Brașov (19), Brăila (18), … total 189 taxe / 34 zone / 14 surse |
-| **Neimportat (intenționat)** | „de confirmat”, sursă secundară (ex. București 2027), negăsit, proiecte HCL |
-| **Definition of done** | ≥14 localități confirmate din act folosibile în Caută taxe / Cost cursă — **atins pentru lotul sigur**; urmează lotul „de confirmat” + apeluri |
+| **Status** | **Parțial done (~80%, review 12.10.2026)** — lot **Confirmat** + lot **coadă** în DB |
+| **Unde** | UI: `/localitati`, `/baza-taxe`, `/surse`, Prezentare „Verificări necesare”. Scripturi: `db:import-safe` + `db:import-queue` |
+| **Cum** | Safe = status „confirmate din act”; Queue = „de confirmat” / secundar fără a atinge Confirmatele; `--force` reimportă |
+| **Resursă research** | `data/research/Taxe_acces_camioane_Romania.xlsx` (+ README) în repo |
+| **În DB acum (local tipic)** | ~81 localități; **189 Confirmat** + **~321 De confirmat**; zone/surse pe lotul sigur |
+| **Coadă UI** | Prezentare: filtre „doar P1” + ascundere „Negăsit”; Confirmatele nu apar în tabelul de verificări |
+| **Definition of done** | Lot sigur folosibil în Caută taxe / Cost cursă — **atins**; coadă de confirmat — **importată**, de lucrat uman + apeluri |
 
 ### 2. Email (Resend sau similar) — OTP + reset password
 
@@ -104,10 +104,10 @@
 
 | | |
 | --- | --- |
-| **Status** | **Parțial** — hartă Leaflet + alerte construite în FE (`construiesteAlerte`); fără cron/job |
-| **Unde** | `src/pages/Harta.jsx`, `src/components/HartaLeaflet.jsx`, `src/pages/Alerte.jsx`, `reguliTaxe.js` |
-| **Cum** | UX: poligoane clare, filtre, click→reguli. Juridic: status act / încredere / expirare obligatorii la publish. Alerte: job periodic (sau la login admin) care regenerază `alerte` din reguli stale |
-| **Definition of done** | Alerte persistate + regenerare automată; hartă utilă pe București real |
+| **Status** | **Parțial (~30%→polish ops)** — hartă Leaflet există; alerte FE agregate (fără o alertă per „De confirmat”); badge Critică/Ridicată; **fără cron** |
+| **Unde** | `Harta.jsx`, `HartaLeaflet.jsx`, `Alerte.jsx`, `construiesteAlerte` în `reguliTaxe.js` |
+| **Cum** | Regenerare manuală pe /alerte (înlocuiește Nouă/În lucru). GeoJSON încă lipsă pe majoritatea UAT. Job periodic = ulterior |
+| **Definition of done** | Alerte persistate + regenerare automată; hartă utilă pe București real — **neatinse** (cron + GeoJSON) |
 
 ### 6. Teste API (ca în Transitix) — entități + auth
 
@@ -134,11 +134,11 @@ De notat (cererea @Loki), **nu** blochează §11.1–11.6:
 ## E. Ordine de atac recomandată
 
 ```text
-1) §11.1 Date reale (xlsx → CSV/import)     ← deblocant produs
-2) §11.4 Deploy staging                     ← ceilalți văd app-ul
+1) §11.1 Date reale (xlsx → import)         ← lot Confirmat + coadă: DONE ops; urmează confirmări umane
+2) §11.4 Deploy staging                     ← următorul strategic (decizie infra/VM)
 3) §11.2 Email OTP/reset                    ← onboarding real
 4) §11.6 Teste API smoke                    ← nu stricăm auth/CRUD
-5) §11.5 Hartă + alerte periodice           ← UX / ops
+5) §11.5 Hartă + alerte periodice           ← polish alerte/coadă făcut; cron + GeoJSON rămân
 6) §11.3 Google (doar dacă e nevoie)
 ── apoi ──
 7) Multi-tenant + API B2B (agenda Geo)

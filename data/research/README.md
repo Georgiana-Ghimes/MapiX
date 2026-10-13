@@ -17,6 +17,12 @@ Override path: `MAPIX_XLSX=/cale/custom.xlsx npm run db:import-safe`.
 
 ### Acoperire „sigură” so far (confirmate din act)
 
-București; Ilfov: Afumați, Buftea, Chiajna; reședințe: Arad, Oradea, Botoșani, Brașov, Brăila, Sfântu Gheorghe, Miercurea Ciuc, Târgu Mureș, Satu Mare, Focșani.
+București; Ilfov: Afumați, Buftea, Chiajna, **Bragadiru** (HCL 41/28.02.2025); reședințe: Arad, Oradea, Botoșani, Brașov, Brăila, Sfântu Gheorghe, Miercurea Ciuc, Târgu Mureș, Satu Mare, Focșani.
+
+### Acte scanate în app
+
+| Localitate | Fișier | Import |
+| --- | --- | --- |
+| Bragadiru | `acts/bragadiru/HCL-41-28.02.2025-regulament-tonaj.pdf` (+ `public/docs/bragadiru/…` pentru UI) | `npm run db:import-bragadiru` |
 
 Restul din foaie rămâne pe coadă până la confirmare HCL / apel primărie. Nu există încă sync DB partajat — acest fișier e sursa de seed pentru fiecare mediu local.

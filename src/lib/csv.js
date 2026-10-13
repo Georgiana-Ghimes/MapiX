@@ -1,5 +1,5 @@
 // Utilitare pentru importul și exportul de date în format CSV (separator „;”, format românesc).
-import { esteGol, laNumar } from './format';
+import { esteGol, faraDiacritice, laNumar } from './format';
 import {
   CATEGORII_REGULA,
   MONEDE,
@@ -223,12 +223,14 @@ export function valideazaImport(tipId, randuri, { localitati = [], zone = [] } =
   const pregatite = [];
   if (!definitie) return { erori, avertismente, pregatite };
 
-  const gasesteLocalitate = (nume) =>
-    localitati.find((l) => l.nume.toLowerCase() === String(nume || '').trim().toLowerCase());
-  const gasesteZona = (nume, localitateId) =>
-    zone.find(
-      (z) => z.nume_zona.toLowerCase() === String(nume || '').trim().toLowerCase() && z.localitate_id === localitateId
-    );
+  const gasesteLocalitate = (nume) => {
+    const tinta = faraDiacritice(nume).trim();
+    return localitati.find((l) => faraDiacritice(l.nume) === tinta);
+  };
+  const gasesteZona = (nume, localitateId) => {
+    const tinta = faraDiacritice(nume).trim();
+    return zone.find((z) => faraDiacritice(z.nume_zona) === tinta && z.localitate_id === localitateId);
+  };
 
   randuri.forEach((row, index) => {
     const linie = index + 2;

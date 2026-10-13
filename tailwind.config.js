@@ -11,6 +11,15 @@ module.exports = {
   			sm: 'calc(var(--radius) - 4px)'
   		},
   		colors: {
+  			/*
+  			 * WCAG 2.1 AA pe fundal alb: text secundar ≥ 4.5:1.
+  			 * Remapăm treptele folosite ca text/icon (slate-400/500 erau prea deschise).
+  			 * slate-400 → echivalent vizual slate-600; slate-500 → slate-700.
+  			 */
+  			slate: {
+  				400: '#475569',
+  				500: '#334155',
+  			},
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {

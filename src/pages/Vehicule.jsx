@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil, Plus, Search, Truck } from 'lucide-react';
 import { api } from '@/api/client';
@@ -19,47 +19,69 @@ import { CATEGORII_VEHICUL } from '@/lib/enum';
 export default function Vehicule() {
   const { toast } = useToast();
   const [lista, setLista] = useState([]);
-  const [seIncarca, setSeIncarca] = useState(true);
+  const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
+  const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [eroare, setEroare] = useState(null);
   const [cautare, setCautare] = useState('');
+  const [cautareDebounced, setCautareDebounced] = useState('');
   const [categorie, setCategorie] = useState('toate');
   const [status, setStatus] = useState('toate');
   const [formular, setFormular] = useState({ deschis: false, item: null });
 
-  const construiesteQuery = useCallback(() => {
+  useEffect(() => {
+    const t = setTimeout(() => setCautareDebounced(cautare.trim()), 250);
+    return () => clearTimeout(t);
+  }, [cautare]);
+
+  const filtreEfective = useMemo(
+    () => ({ cautare: cautareDebounced, categorie, status }),
+    [cautareDebounced, categorie, status]
+  );
+
+  const construiesteQuery = useCallback((f) => {
     const conditii = [];
-    if (categorie !== 'toate') conditii.push({ categorie_vehicul: categorie });
-    if (status !== 'toate') conditii.push({ status });
-    if (cautare.trim()) {
-      const termen = cautare.trim();
+    if (f.categorie !== 'toate') conditii.push({ categorie_vehicul: f.categorie });
+    if (f.status !== 'toate') conditii.push({ status: f.status });
+    if (f.cautare) {
       conditii.push({
         $or: [
-          { numar_inmatriculare: { $regex: termen, $options: 'i' } },
-          { nume_intern: { $regex: termen, $options: 'i' } },
+          { numar_inmatriculare: { $regex: f.cautare, $options: 'i' } },
+          { nume_intern: { $regex: f.cautare, $options: 'i' } },
         ],
       });
     }
     if (conditii.length === 0) return {};
     if (conditii.length === 1) return conditii[0];
     return { $and: conditii };
-  }, [cautare, categorie, status]);
+  }, []);
 
-  const incarca = useCallback(async () => {
-    setSeIncarca(true);
-    setEroare(null);
-    try {
-      const page = await api.entities.Vehicul.filter(construiesteQuery(), { sort: 'numar_inmatriculare', limit: 200 });
-      setLista(page.items || []);
-    } catch (e) {
-      setEroare(e.message || 'Nu am putut încărca vehiculele.');
-    } finally {
-      setSeIncarca(false);
-    }
-  }, [construiesteQuery]);
+  const incarca = useCallback(
+    async ({ initial = false } = {}) => {
+      if (initial) {
+        setSeIncarcaInitial(true);
+        setEroare(null);
+      } else setSeFiltreaza(true);
+      try {
+        const page = await api.entities.Vehicul.filter(construiesteQuery(filtreEfective), {
+          sort: 'numar_inmatriculare',
+          limit: 200,
+        });
+        setLista(page.items || []);
+        setEroare(null);
+      } catch (e) {
+        setEroare(e.message || 'Nu am putut încărca vehiculele.');
+      } finally {
+        setSeIncarcaInitial(false);
+        setSeFiltreaza(false);
+      }
+    },
+    [construiesteQuery, filtreEfective]
+  );
 
   useEffect(() => {
-    incarca();
-  }, [incarca]);
+    incarca({ initial: seIncarcaInitial && lista.length === 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtreEfective]);
 
   const dezactiveaza = async (vehicul) => {
     try {
@@ -72,8 +94,8 @@ export default function Vehicule() {
     }
   };
 
-  if (seIncarca) return <StareIncarcare mesaj="Se încarcă vehiculele…" />;
-  if (eroare) return <StareEroare mesaj={eroare} onReincearca={incarca} />;
+  if (seIncarcaInitial) return <StareIncarcare mesaj="Se încarcă vehiculele…" />;
+  if (eroare && lista.length === 0) return <StareEroare mesaj={eroare} onReincearca={() => incarca({ initial: true })} />;
 
   return (
     <div>
@@ -127,6 +149,7 @@ export default function Vehicule() {
         </div>
       </div>
 
+      <div className={seFiltreaza ? 'opacity-60 transition-opacity' : undefined} aria-busy={seFiltreaza || undefined}>
       {lista.length === 0 ? (
         <EmptyState
           icon={Truck}
@@ -188,6 +211,7 @@ export default function Vehicule() {
           </table>
         </div>
       )}
+      </div>
 
       <p className="mt-3 text-xs text-slate-500">
         Masa maximă autorizată (MTMA) și masa efectivă nu sunt interschimbabile. La căutare și la calcul alegi explicit criteriul de masă
@@ -198,7 +222,7 @@ export default function Vehicule() {
         open={formular.deschis}
         onOpenChange={(o) => setFormular((f) => ({ ...f, deschis: o }))}
         vehicul={formular.item}
-        onSalvat={incarca}
+        onSalvat={() => incarca()}
       />
     </div>
   );

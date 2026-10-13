@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Archive, Pencil, Plus, Search } from 'lucide-react';
 import { api } from '@/api/client';
 import PageHeader from '@/components/PageHeader';
@@ -10,6 +10,7 @@ import StareEroare from '@/components/StareEroare';
 import TaxaFormDialog from '@/components/TaxaFormDialog';
 import RegulaDetaliiDialog from '@/components/RegulaDetaliiDialog';
 import LocalitateSelect from '@/components/LocalitateSelect';
+import ListaJudetExpand from '@/components/ListaJudetExpand';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,7 +28,10 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/lib/AuthContext';
-import { azi, dataRo, masaRo, sumaRo } from '@/lib/format';
+import { azi, dataRo, masaRo, numarRo, sumaRo } from '@/lib/format';
+import { gruparePeJudet } from '@/lib/grupareJudet';
+import { PANEL_FILTERS } from '@/lib/uiPanel';
+import { cn } from '@/lib/utils';
 import { detecteazaSuprapuneri } from '@/lib/reguliTaxe';
 import { CATEGORII_REGULA, MONEDE, NIVELURI_INCREDERE, STATUSURI_TAXA } from '@/lib/enum';
 
@@ -46,6 +50,7 @@ const FILTRE_GOL = {
 export default function BazaTaxe() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const esteAdmin = user?.role === 'admin';
   const [lista, setLista] = useState([]);
   const [cursor, setCursor] = useState(null);
@@ -53,63 +58,136 @@ export default function BazaTaxe() {
   const [localitati, setLocalitati] = useState([]);
   const [zone, setZone] = useState([]);
   const [surse, setSurse] = useState([]);
-  const [seIncarca, setSeIncarca] = useState(true);
+  const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
+  const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [seIncarcaMaiMulte, setSeIncarcaMaiMulte] = useState(false);
   const [eroare, setEroare] = useState(null);
-  const [filtre, setFiltre] = useState(FILTRE_GOL);
+  const [filtre, setFiltre] = useState(() => {
+    const status = searchParams.get('status');
+    return {
+      ...FILTRE_GOL,
+      ...(status ? { status } : {}),
+    };
+  });
+  const [cautareDebounced, setCautareDebounced] = useState('');
   const [formular, setFormular] = useState({ deschis: false, item: null, localitateId: null });
   const [detalii, setDetalii] = useState(null);
   const [deArhivat, setDeArhivat] = useState(null);
 
-  const construiesteQuery = useCallback(() => {
+  useEffect(() => {
+    const t = setTimeout(() => setCautareDebounced(filtre.cautare.trim()), 250);
+    return () => clearTimeout(t);
+  }, [filtre.cautare]);
+
+  const filtreEfective = useMemo(
+    () => ({ ...filtre, cautare: cautareDebounced }),
+    [
+      filtre.localitate,
+      filtre.categorie,
+      filtre.incredere,
+      filtre.status,
+      filtre.moneda,
+      filtre.expirate,
+      filtre.arhivate,
+      filtre.sort,
+      cautareDebounced,
+    ]
+  );
+
+  const construiesteQuery = useCallback((f, localitateIdsDinCautare = []) => {
     const conditii = [];
-    if (filtre.localitate !== 'toate') conditii.push({ localitate_id: filtre.localitate });
-    if (filtre.categorie !== 'toate') conditii.push({ categorie_regula: filtre.categorie });
-    if (filtre.incredere !== 'toate') conditii.push({ incredere: filtre.incredere });
-    if (filtre.status !== 'toate') conditii.push({ status: filtre.status });
-    else if (!filtre.arhivate) conditii.push({ status: { $ne: 'Arhivat' } });
-    if (filtre.moneda !== 'toate') conditii.push({ moneda: filtre.moneda });
-    if (filtre.cautare.trim()) conditii.push({ denumire_regula: { $regex: filtre.cautare.trim(), $options: 'i' } });
-    if (filtre.expirate) conditii.push({ $or: [{ status: 'Expirat' }, { perioada_valabilitate_end: { $lt: azi() } }] });
+    if (f.localitate !== 'toate') conditii.push({ localitate_id: f.localitate });
+    if (f.categorie !== 'toate') conditii.push({ categorie_regula: f.categorie });
+    if (f.incredere !== 'toate') conditii.push({ incredere: f.incredere });
+    if (f.status !== 'toate') conditii.push({ status: f.status });
+    else if (!f.arhivate) conditii.push({ status: { $ne: 'Arhivat' } });
+    if (f.moneda !== 'toate') conditii.push({ moneda: f.moneda });
+    if (f.cautare) {
+      const or = [{ denumire_regula: { $regex: f.cautare, $options: 'i' } }];
+      if (localitateIdsDinCautare.length) or.push({ localitate_id: { $in: localitateIdsDinCautare } });
+      conditii.push(or.length === 1 ? or[0] : { $or: or });
+    }
+    if (f.expirate) conditii.push({ $or: [{ status: 'Expirat' }, { perioada_valabilitate_end: { $lt: azi() } }] });
     if (conditii.length === 0) return {};
     if (conditii.length === 1) return conditii[0];
     return { $and: conditii };
-  }, [filtre]);
+  }, []);
 
   const sortare = useMemo(() => {
     const harta = { verificare: '-data_verificare', nume: 'denumire_regula', valoare_asc: 'valoare', valoare_desc: '-valoare' };
-    return harta[filtre.sort] || '-data_verificare';
-  }, [filtre.sort]);
+    return harta[filtreEfective.sort] || '-data_verificare';
+  }, [filtreEfective.sort]);
 
   const incarca = useCallback(
-    async (reset = true) => {
-      if (reset) setSeIncarca(true);
-      else setSeIncarcaMaiMulte(true);
-      setEroare(null);
+    async ({ reset = true, initial = false } = {}) => {
+      // Expand pe județ: la reset încărcăm tot setul filtrat (nu doar 50).
+      if (!reset) setSeIncarcaMaiMulte(true);
+      else if (initial) {
+        setSeIncarcaInitial(true);
+        setEroare(null);
+      } else setSeFiltreaza(true);
       try {
-        const page = await api.entities.TaxaAcces.filter(construiesteQuery(), {
-          sort: sortare,
-          limit: 50,
-          cursor: reset ? undefined : cursor,
-        });
-        setLista((prev) => (reset ? page.items || [] : [...prev, ...(page.items || [])]));
-        setCursor(page.next_cursor || null);
-        setAreMaiMulte(!!page.has_more);
+        let localitateIdsDinCautare = [];
+        if (filtreEfective.cautare) {
+          const pageLoc = await api.entities.Localitate.filter(
+            { nume: { $regex: filtreEfective.cautare, $options: 'i' }, archived: { $ne: true } },
+            { limit: 200, fields: ['id'] }
+          );
+          localitateIdsDinCautare = (pageLoc.items || []).map((l) => l.id);
+        }
+        const query = construiesteQuery(filtreEfective, localitateIdsDinCautare);
+        const LIMIT = 200;
+        const MAX = 5000;
+
+        if (!reset) {
+          const page = await api.entities.TaxaAcces.filter(query, {
+            sort: sortare,
+            limit: LIMIT,
+            cursor: cursor || undefined,
+          });
+          const chunk = page.items || [];
+          setLista((prev) => [...prev, ...chunk]);
+          setCursor(page.next_cursor || null);
+          setAreMaiMulte(!!page.has_more && chunk.length > 0);
+        } else {
+          const acumulate = [];
+          let cursorCurent;
+          let hasMore = true;
+          while (hasMore && acumulate.length < MAX) {
+            const page = await api.entities.TaxaAcces.filter(query, {
+              sort: sortare,
+              limit: LIMIT,
+              cursor: cursorCurent,
+            });
+            const chunk = page.items || [];
+            acumulate.push(...chunk);
+            hasMore = !!page.has_more && chunk.length > 0;
+            cursorCurent = page.next_cursor || null;
+          }
+          setLista(acumulate);
+          setCursor(cursorCurent || null);
+          setAreMaiMulte(hasMore);
+        }
+        setEroare(null);
       } catch (e) {
         setEroare(e.message || 'Nu am putut încărca baza de taxe.');
       } finally {
-        setSeIncarca(false);
+        setSeIncarcaInitial(false);
+        setSeFiltreaza(false);
         setSeIncarcaMaiMulte(false);
       }
     },
-    [construiesteQuery, sortare, cursor]
+    [construiesteQuery, sortare, cursor, filtreEfective]
   );
 
   const incarcaReferinte = useCallback(async () => {
     try {
       const [pageLocalitati, pageZone, pageSurse] = await Promise.all([
-        api.entities.Localitate.filter({ archived: { $ne: true } }, { sort: 'nume', limit: 500, fields: ['nume', 'judet'] }),
-        api.entities.Zona.filter({ archived: { $ne: true } }, { limit: 500, fields: ['nume_zona', 'localitate_id'] }),
+        api.entities.Localitate.filter(
+          { archived: { $ne: true } },
+          { sort: 'nume', limit: 500, fields: ['nume', 'judet', 'prioritate', 'tip_localitate'] }
+        ),
+        api.entities.Zona.filter({ archived: { $ne: true } }, { limit: 500, fields: ['nume_zona', 'localitate_id', 'descriere'] }),
         api.entities.SursaAct.filter({}, { limit: 500, fields: ['titlu_document', 'localitate_id', 'numar_act', 'tip_act'] }),
       ]);
       setLocalitati(pageLocalitati.items || []);
@@ -123,9 +201,9 @@ export default function BazaTaxe() {
   }, []);
 
   useEffect(() => {
-    incarca(true);
-     
-  }, [filtre]);
+    incarca({ reset: true, initial: seIncarcaInitial && lista.length === 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when effective filters change
+  }, [filtreEfective]);
 
   useEffect(() => {
     incarcaReferinte();
@@ -140,10 +218,34 @@ export default function BazaTaxe() {
       .catch(() => setDetalii(null));
   }, []);
 
-  const numeLocalitate = (id) => localitati.find((l) => l.id === id)?.nume || '—';
+  const metaLocalitate = (id) => localitati.find((l) => l.id === id);
+  const numeLocalitate = (id) => metaLocalitate(id)?.nume || '—';
 
   const faraSursa = useMemo(() => lista.filter((r) => !r.sursa_url && !r.act_normativ_id), [lista]);
   const suprapuneri = useMemo(() => detecteazaSuprapuneri(lista).slice(0, 5), [lista]);
+  const listaPeJudet = useMemo(
+    () =>
+      gruparePeJudet(lista, {
+        getJudet: (r) => metaLocalitate(r.localitate_id)?.judet,
+        getLocId: (r) => r.localitate_id,
+        getLocNume: (r) => {
+          const l = metaLocalitate(r.localitate_id);
+          if (!l) return '—';
+          return l.tip_localitate ? `${l.nume} · ${l.tip_localitate}` : l.nume;
+        },
+        getPrioritate: (r) => metaLocalitate(r.localitate_id)?.prioritate,
+        getZonaId: (r) => r.zona_id || null,
+        getZonaNume: (r) => zone.find((z) => z.id === r.zona_id)?.nume_zona || 'Întreaga localitate',
+      }),
+    // localitati / zone drive meta lookups
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lista, localitati, zone]
+  );
+  const rezumatLista = useMemo(() => {
+    const nrJudete = listaPeJudet.length;
+    const nrLocalitati = listaPeJudet.reduce((n, j) => n + (j.nrLocalitati || 0), 0);
+    return { nrJudete, nrLocalitati, nrReguli: lista.length };
+  }, [listaPeJudet, lista.length]);
 
   const arhiveaza = async () => {
     if (!deArhivat) return;
@@ -151,7 +253,7 @@ export default function BazaTaxe() {
       await api.entities.TaxaAcces.update(deArhivat.id, { status: 'Arhivat' });
       toast({ title: 'Regula a fost arhivată', description: deArhivat.denumire_regula });
       setDeArhivat(null);
-      incarca(true);
+      incarca({ reset: true });
     } catch (e) {
       toast({ title: 'Arhivarea nu a reușit', description: e.message, variant: 'destructive' });
     }
@@ -159,14 +261,14 @@ export default function BazaTaxe() {
 
   const seteazaFiltru = (camp, valoare) => setFiltre((f) => ({ ...f, [camp]: valoare }));
 
-  if (seIncarca) return <StareIncarcare mesaj="Se încarcă baza de taxe…" />;
-  if (eroare) return <StareEroare mesaj={eroare} onReincearca={() => incarca(true)} />;
+  if (seIncarcaInitial) return <StareIncarcare mesaj="Se încarcă baza de taxe…" />;
+  if (eroare && lista.length === 0) return <StareEroare mesaj={eroare} onReincearca={() => incarca({ reset: true, initial: true })} />;
 
   return (
     <div>
       <PageHeader
         titlu="Baza de taxe"
-        descriere="Administrarea regulilor de acces, a intervalelor de masă, a unităților de tarifare și a surselor de verificare."
+        descriere="Reguli pe județ → localitate (municipiu, oraș sau comună — unde există taxe/restricții în bază). Nu e limitat la orașe."
         actiuni={
           esteAdmin ? (
             <Button onClick={() => setFormular({ deschis: true, item: null, localitateId: null })}>
@@ -181,12 +283,17 @@ export default function BazaTaxe() {
         }
       />
 
-      <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={cn(PANEL_FILTERS, 'sm:grid-cols-2 lg:grid-cols-4')}>
         <div className="lg:col-span-2">
-          <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după denumirea regulii</Label>
+          <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după regulă sau localitate</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-            <Input value={filtre.cautare} onChange={(e) => seteazaFiltru('cautare', e.target.value)} placeholder="Ex.: zonă centrală" className="pl-8" />
+            <Input
+              value={filtre.cautare}
+              onChange={(e) => seteazaFiltru('cautare', e.target.value)}
+              placeholder="Ex.: Bucuresti, zonă centrală"
+              className="pl-8"
+            />
           </div>
         </div>
         <div>
@@ -304,6 +411,7 @@ export default function BazaTaxe() {
         </div>
       ) : null}
 
+      <div className={seFiltreaza ? 'opacity-60 transition-opacity' : undefined} aria-busy={seFiltreaza || undefined}>
       {lista.length === 0 ? (
         <EmptyState
           titlu="Nicio regulă găsită"
@@ -312,95 +420,81 @@ export default function BazaTaxe() {
         />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-            <table className="w-full min-w-[1200px] text-sm">
-              <caption className="sr-only">Reguli de acces din baza de date</caption>
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <th scope="col" className="px-3 py-2 font-medium">Localitate</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Zonă</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Tip regulă</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Masă min. / max.</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Valoare</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Valabilitate</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Încredere</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Ultima verificare</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Sursă</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Status</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Acțiuni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lista.map((r) => (
-                  <tr key={r.id} className="border-b border-slate-100 last:border-b-0 align-top">
-                    <td className="px-3 py-2">
-                      <Link to={`/localitati/${r.localitate_id}`} className="text-blue-700 hover:underline">
-                        {numeLocalitate(r.localitate_id)}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">{zone.find((z) => z.id === r.zona_id)?.nume_zona || 'Întreaga localitate'}</td>
-                    <td className="px-3 py-2">
-                      <span className="block font-medium text-slate-800">{r.denumire_regula}</span>
-                      <StatusBadge valoare={r.categorie_regula} />
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">
-                      {r.masa_min_t || r.masa_max_t ? `${masaRo(r.masa_min_t)} / ${masaRo(r.masa_max_t)}` : 'Nedocumentată'}
-                      <span className="block text-xs text-slate-400">{r.tip_masa || 'Necunoscut'}</span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-700">
-                      {r.valoare === null || r.valoare === undefined ? 'Nedocumentată' : sumaRo(r.valoare, r.moneda)}
-                      <span className="block text-xs text-slate-400">{r.unitate_tarifare || '—'}</span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">
-                      {r.perioada_valabilitate_start || r.perioada_valabilitate_end
-                        ? `${dataRo(r.perioada_valabilitate_start)} – ${dataRo(r.perioada_valabilitate_end)}`
-                        : 'Nedocumentată'}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge valoare={r.incredere} />
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">{r.data_verificare ? dataRo(r.data_verificare) : 'Neverificată'}</td>
-                    <td className="px-3 py-2">
+          <p className="mb-3 text-xs text-slate-600">
+            {numarRo(rezumatLista.nrJudete, 0)} {rezumatLista.nrJudete === 1 ? 'județ' : 'județe'}
+            {' · '}
+            {numarRo(rezumatLista.nrLocalitati, 0)}{' '}
+            {rezumatLista.nrLocalitati === 1 ? 'localitate' : 'localități'}
+            {' · '}
+            {numarRo(rezumatLista.nrReguli, 0)} {rezumatLista.nrReguli === 1 ? 'regulă' : 'reguli'}
+            {areMaiMulte ? ' (încărcare parțială — folosește „Încarcă mai multe”)' : ''}
+          </p>
+          <ListaJudetExpand
+            judete={listaPeJudet}
+            etichetaItems="reguli"
+            renderItem={(r) => (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900">{r.denumire_regula}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {zone.find((z) => z.id === r.zona_id)?.nume_zona || 'Întreaga localitate'}
+                      {' · '}
+                      {r.masa_min_t || r.masa_max_t ? `${masaRo(r.masa_min_t)} / ${masaRo(r.masa_max_t)}` : 'Masă nedocumentată'}
+                      {' · '}
+                      {r.valoare === null || r.valoare === undefined ? 'Valoare nedocumentată' : sumaRo(r.valoare, r.moneda)}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Verificare: {r.data_verificare ? dataRo(r.data_verificare) : 'neverificată'}
+                      {' · '}
                       {r.sursa_url ? (
                         <a href={r.sursa_url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline underline-offset-2">
-                          Deschide sursa
+                          Sursă
                         </a>
                       ) : r.act_normativ_id ? (
-                        <span className="text-slate-600">Act asociat</span>
+                        'Act asociat'
                       ) : (
-                        <span className="text-amber-800">Lipsă</span>
+                        <span className="text-amber-800">Sursă lipsă</span>
                       )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge valoare={r.status} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Button size="sm" variant="ghost" onClick={() => setDetalii(r)}>
-                          Vezi detalii
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <StatusBadge valoare={r.categorie_regula} />
+                    <StatusBadge valoare={r.incredere} />
+                    <StatusBadge valoare={r.status} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => setDetalii(r)}>
+                    Vezi detalii
+                  </Button>
+                  <Button asChild size="sm" variant="ghost">
+                    <Link to={`/localitati/${r.localitate_id}`}>Localitate</Link>
+                  </Button>
+                  {esteAdmin ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setFormular({ deschis: true, item: r, localitateId: r.localitate_id })}
+                        aria-label="Editează regula"
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                      </Button>
+                      {r.status !== 'Arhivat' ? (
+                        <Button size="sm" variant="ghost" onClick={() => setDeArhivat(r)} aria-label="Arhivează regula">
+                          <Archive className="h-3.5 w-3.5" aria-hidden="true" />
                         </Button>
-                        {esteAdmin ? (
-                          <>
-                            <Button size="sm" variant="ghost" onClick={() => setFormular({ deschis: true, item: r, localitateId: r.localitate_id })} aria-label="Editează regula">
-                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                            </Button>
-                            {r.status !== 'Arhivat' ? (
-                              <Button size="sm" variant="ghost" onClick={() => setDeArhivat(r)} aria-label="Arhivează regula">
-                                <Archive className="h-3.5 w-3.5" aria-hidden="true" />
-                              </Button>
-                            ) : null}
-                          </>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          />
           {areMaiMulte ? (
             <div className="mt-4 flex justify-center">
-              <Button variant="outline" onClick={() => incarca(false)} disabled={seIncarcaMaiMulte}>
+              <Button variant="outline" onClick={() => incarca({ reset: false })} disabled={seIncarcaMaiMulte}>
                 {seIncarcaMaiMulte ? 'Se încarcă…' : 'Încarcă mai multe'}
               </Button>
             </div>
@@ -410,6 +504,7 @@ export default function BazaTaxe() {
           </p>
         </>
       )}
+      </div>
 
       <TaxaFormDialog
         open={formular.deschis}
@@ -419,7 +514,7 @@ export default function BazaTaxe() {
         localitati={localitati}
         zone={zone}
         surse={surse}
-        onSalvat={() => incarca(true)}
+        onSalvat={() => incarca({ reset: true })}
       />
       <RegulaDetaliiDialog
         open={!!detalii}

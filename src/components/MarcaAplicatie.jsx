@@ -18,7 +18,7 @@ export default function MarcaAplicatie({ className, cuSigla = true }) {
       ) : null}
       <div className="min-w-0 leading-tight">
         <div className="font-heading text-sm font-semibold tracking-tight text-slate-900">{NUME_APLICATIE}</div>
-        <div className="text-[11px] text-slate-500">{SUBTITLU_APLICATIE}</div>
+        <div className="text-[11px] text-slate-700">{SUBTITLU_APLICATIE}</div>
       </div>
     </div>
   );

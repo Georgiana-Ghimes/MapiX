@@ -7,7 +7,7 @@ export default function AppVersion({ className, compact = false }) {
   return (
     <p
       className={cn(
-        'select-none font-mono text-xs tabular-nums tracking-wide text-slate-500',
+        'select-none font-mono text-xs tabular-nums tracking-wide text-slate-700',
         className
       )}
       title={`MapiX ${formatAppVersion()}`}

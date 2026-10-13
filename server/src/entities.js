@@ -182,7 +182,8 @@ export function pickWritable(cfg, data) {
 
 /**
  * Translate Mongo-style entity filters into SQL WHERE clauses.
- * Supports: equality, null, $ne, $in, $exists, $regex(+ $options i), $lt/$lte/$gt/$gte, $and, $or.
+ * Supports: equality, null, $ne, $in, $exists, $regex(+ $options i, diacritic-insensitive via unaccent),
+ * $lt/$lte/$gt/$gte, $and, $or.
  */
 export function buildFilterClauses(filters, { allowedKeys, startIndex = 1 }) {
   const params = [];
@@ -216,9 +217,12 @@ export function buildFilterClauses(filters, { allowedKeys, startIndex = 1 }) {
           .replace(/_/g, '\\_');
         const like = `%${escaped}%`;
         const insensitive = String(value.$options || '').includes('i');
+        // unaccent: "Bucuresti" matches "București" (and reverse)
+        const left = `unaccent(${key}::text)`;
+        const right = `unaccent(${ph(like)})`;
         return insensitive
-          ? `${key} ILIKE ${ph(like)} ESCAPE '\\'`
-          : `${key} LIKE ${ph(like)} ESCAPE '\\'`;
+          ? `${left} ILIKE ${right} ESCAPE '\\'`
+          : `${left} LIKE ${right} ESCAPE '\\'`;
       }
       const parts = [];
       if (Object.prototype.hasOwnProperty.call(value, '$lt')) parts.push(`${key} < ${ph(value.$lt)}`);

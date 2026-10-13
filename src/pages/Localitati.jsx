@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Archive, FileText, MapPin, Pencil, Plus, Search } from 'lucide-react';
 import { api } from '@/api/client';
 import PageHeader from '@/components/PageHeader';
@@ -28,8 +28,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/lib/AuthContext';
+import { ExpandToggle, useExpandSet } from '@/components/ExpandToggle';
 import { dataRo, numarRo } from '@/lib/format';
+import { gruparePeJudet } from '@/lib/grupareJudet';
+import { NEST_JUDET, PANEL_FILTERS, TABLE_SHELL } from '@/lib/uiPanel';
+import { cn } from '@/lib/utils';
 import { PRIORITATI, STATUSURI_ACOPERIRE, STATUS_REGLEMENTARE } from '@/lib/enum';
+import { JUDETE_RO } from '@/lib/judeteRo';
 
 const FILTRE_GOL = {
   cautare: '',
@@ -43,16 +48,22 @@ const FILTRE_GOL = {
 export default function Localitati() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const esteAdmin = user?.role === 'admin';
   const [lista, setLista] = useState([]);
-  const [toatePentruJudete, setToatePentruJudete] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [areMaiMulte, setAreMaiMulte] = useState(false);
   const [seIncarcaInitial, setSeIncarcaInitial] = useState(true);
   const [seFiltreaza, setSeFiltreaza] = useState(false);
   const [seIncarcaMaiMulte, setSeIncarcaMaiMulte] = useState(false);
   const [eroare, setEroare] = useState(null);
-  const [filtre, setFiltre] = useState(FILTRE_GOL);
+  const [filtre, setFiltre] = useState(() => {
+    const acoperire = searchParams.get('acoperire');
+    return {
+      ...FILTRE_GOL,
+      ...(acoperire ? { status_acoperire: acoperire } : {}),
+    };
+  });
   const [cautareDebounced, setCautareDebounced] = useState('');
   const [numarReguli, setNumarReguli] = useState({});
   const [numarZone, setNumarZone] = useState({});
@@ -94,9 +105,11 @@ export default function Localitati() {
         setSeIncarcaMaiMulte(true);
       }
       try {
+        // Catalogul e mic (~100); încărcăm generos ca să apară toate județele în accordion
+        // (limit 25 + sort prioritate ascundea Dâmbovița etc. în spatele „Încarcă mai multe”).
         const page = await api.entities.Localitate.filter(construiesteQuery(filtreEfective), {
-          sort: 'prioritate',
-          limit: 25,
+          sort: 'judet',
+          limit: 500,
           cursor: reset ? undefined : cursorCurent,
         });
         setLista((prev) => (reset ? page.items || [] : [...prev, ...(page.items || [])]));
@@ -116,13 +129,9 @@ export default function Localitati() {
 
   const incarcaNumaratori = useCallback(async () => {
     try {
-      const [reguli, zone, catalogJudete] = await Promise.all([
+      const [reguli, zone] = await Promise.all([
         api.entities.TaxaAcces.aggregate({ query: { status: { $ne: 'Arhivat' } }, groupBy: 'localitate_id', limit: 1000 }),
         api.entities.Zona.aggregate({ query: { archived: { $ne: true } }, groupBy: 'localitate_id', limit: 1000 }),
-        api.entities.Localitate.filter(
-          { archived: { $ne: true } },
-          { sort: 'judet', limit: 500, fields: ['judet'] }
-        ),
       ]);
       const laHarta = (randuri) =>
         (randuri || []).reduce((acc, r) => {
@@ -132,7 +141,6 @@ export default function Localitati() {
         }, {});
       setNumarReguli(laHarta(reguli.rows));
       setNumarZone(laHarta(zone.rows));
-      setToatePentruJudete(catalogJudete.items || []);
     } catch {
       setNumarReguli({});
       setNumarZone({});
@@ -148,10 +156,15 @@ export default function Localitati() {
     incarcaNumaratori();
   }, [incarcaNumaratori]);
 
-  const judete = useMemo(() => {
-    const set = new Set(toatePentruJudete.map((l) => l.judet).filter(Boolean));
-    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ro'));
-  }, [toatePentruJudete]);
+  const listaPeJudet = useMemo(
+    () =>
+      gruparePeJudet(lista, {
+        getJudet: (l) => l.judet,
+        getPrioritate: (l) => l.prioritate,
+      }),
+    [lista]
+  );
+  const judeteExp = useExpandSet();
 
   const arhiveaza = async () => {
     if (!deArhivat) return;
@@ -175,7 +188,11 @@ export default function Localitati() {
     <div>
       <PageHeader
         titlu="Localități"
-        descriere="Registrul localităților acoperite, cu statusul de acoperire, reglementare și datele de verificare."
+        descriere={
+          lista.length > 0
+            ? `${numarRo(lista.length, 0)} localități în ${numarRo(listaPeJudet.length, 0)} județe — status acoperire, reglementare și date de verificare.`
+            : 'Registrul localităților acoperite, cu statusul de acoperire, reglementare și datele de verificare.'
+        }
         actiuni={
           esteAdmin ? (
             <Button onClick={() => setDialog({ tip: 'localitate', item: null })}>
@@ -186,7 +203,7 @@ export default function Localitati() {
         }
       />
 
-      <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className={cn(PANEL_FILTERS, 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6')}>
         <div className="xl:col-span-2">
           <Label className="mb-1.5 block text-xs font-medium text-slate-600">Caută după denumire</Label>
           <div className="relative">
@@ -194,7 +211,7 @@ export default function Localitati() {
             <Input
               value={filtre.cautare}
               onChange={(e) => seteazaFiltru('cautare', e.target.value)}
-              placeholder="Ex.: Otopeni, București…"
+              placeholder="Ex.: Bucuresti, Otopeni…"
               className="pl-8"
               autoComplete="off"
             />
@@ -224,7 +241,7 @@ export default function Localitati() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="toate">Toate</SelectItem>
-              {judete.map((j) => (
+              {JUDETE_RO.map((j) => (
                 <SelectItem key={j} value={j}>
                   {j}
                 </SelectItem>
@@ -303,126 +320,142 @@ export default function Localitati() {
             />
           ) : (
             <>
-              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                <table className="w-full min-w-[1080px] text-sm">
-                  <caption className="sr-only">Lista localităților acoperite</caption>
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Localitate
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Județ
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Prioritate
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Reglementare
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Acoperire
-                      </th>
-                      <th scope="col" className="px-3 py-2 text-right font-medium">
-                        Reguli
-                      </th>
-                      <th scope="col" className="px-3 py-2 text-right font-medium">
-                        Zone
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Ultima verificare
-                      </th>
-                      <th scope="col" className="px-3 py-2 font-medium">
-                        Acțiuni
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lista.map((l) => (
-                      <tr key={l.id} className="border-b border-slate-100 last:border-b-0 align-top">
-                        <td className="px-3 py-2">
-                          <Link to={`/localitati/${l.id}`} className="font-medium text-blue-700 hover:underline">
-                            {l.nume}
-                          </Link>
-                          {l.este_demo ? <StatusBadge valoare="DEMO" className="ml-2" /> : null}
-                          {l.archived ? <StatusBadge valoare="Arhivată" className="ml-2" /> : null}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600">{l.judet || '—'}</td>
-                        <td className="px-3 py-2">
-                          <StatusBadge valoare={l.prioritate} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <StatusBadge valoare={l.status_reglementare} />
-                        </td>
-                        <td className="px-3 py-2">
-                          <StatusBadge valoare={l.status_acoperire} />
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">
-                          {numarRo(numarReguli[l.id] || 0, 0)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">
-                          {numarRo(numarZone[l.id] || 0, 0)}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600">
-                          {l.ultima_verificare ? dataRo(l.ultima_verificare) : 'Neverificată'}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Button asChild size="sm" variant="ghost">
-                              <Link to={`/localitati/${l.id}`}>Vezi detalii</Link>
-                            </Button>
-                            {esteAdmin ? (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setDialog({ tip: 'localitate', item: l })}
-                                  aria-label={`Editează ${l.nume}`}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setDialog({ tip: 'zona', localitateId: l.id })}
-                                  aria-label={`Adaugă zonă pentru ${l.nume}`}
-                                >
-                                  <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setDialog({ tip: 'regula', localitateId: l.id })}
-                                  aria-label={`Adaugă regulă pentru ${l.nume}`}
-                                >
-                                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setDialog({ tip: 'sursa', localitateId: l.id })}
-                                  aria-label={`Adaugă document pentru ${l.nume}`}
-                                >
-                                  <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                                </Button>
-                                {!l.archived ? (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => setDeArhivat(l)}
-                                    aria-label={`Arhivează ${l.nume}`}
-                                  >
-                                    <Archive className="h-3.5 w-3.5" aria-hidden="true" />
-                                  </Button>
-                                ) : null}
-                              </>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-3">
+                {listaPeJudet.map((grup) => {
+                  const deschis = judeteExp.has(grup.judet) || listaPeJudet.length === 1;
+                  return (
+                    <section key={grup.judet} className={cn(NEST_JUDET, 'overflow-hidden')}>
+                      <div className="border-b border-slate-300/60 bg-slate-200/50 px-3 py-2.5">
+                        <ExpandToggle
+                          deschis={deschis}
+                          peClick={() => judeteExp.toggle(grup.judet)}
+                          eticheta={`${deschis ? 'Restrânge' : 'Extinde'} ${grup.judet}`}
+                          className="font-heading text-sm font-semibold text-slate-900"
+                        >
+                          <span className="flex flex-wrap items-baseline gap-x-3">
+                            <span>{grup.judet}</span>
+                            <span className="text-xs font-normal text-slate-600">
+                              {numarRo(grup.nrItems, 0)} localități
+                              {grup.nrP1 ? ` · ${numarRo(grup.nrP1, 0)} P1` : ''}
+                            </span>
+                          </span>
+                        </ExpandToggle>
+                      </div>
+                      {deschis ? (
+                        <div className={cn(TABLE_SHELL, 'rounded-none border-0 border-t border-slate-300/60 shadow-none')}>
+                          <table className="w-full min-w-[1080px] text-sm">
+                            <caption className="sr-only">Localități din {grup.judet}</caption>
+                            <thead>
+                              <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                                <th scope="col" className="px-3 py-2 font-medium">Localitate</th>
+                                <th scope="col" className="px-3 py-2 font-medium">Prioritate</th>
+                                <th scope="col" className="px-3 py-2 font-medium">Reglementare</th>
+                                <th scope="col" className="px-3 py-2 font-medium">Acoperire</th>
+                                <th scope="col" className="px-3 py-2 text-right font-medium">Reguli</th>
+                                <th scope="col" className="px-3 py-2 text-right font-medium">Zone</th>
+                                <th scope="col" className="px-3 py-2 font-medium">Ultima verificare</th>
+                                <th scope="col" className="px-3 py-2 font-medium">Acțiuni</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {grup.items.map((l) => (
+                                <tr key={l.id} className="border-b border-slate-100 last:border-b-0 align-top">
+                                  <td className="px-3 py-2">
+                                    <Link to={`/localitati/${l.id}`} className="font-medium text-blue-700 hover:underline">
+                                      {l.nume}
+                                    </Link>
+                                    {l.este_demo ? <StatusBadge valoare="DEMO" className="ml-2" /> : null}
+                                    {l.archived ? <StatusBadge valoare="Arhivată" className="ml-2" /> : null}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <StatusBadge valoare={l.prioritate} />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <StatusBadge valoare={l.status_reglementare} />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <StatusBadge valoare={l.status_acoperire} />
+                                  </td>
+                                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                    {numarRo(numarReguli[l.id] || 0, 0)}
+                                  </td>
+                                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                    {numarRo(numarZone[l.id] || 0, 0)}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {l.ultima_verificare ? dataRo(l.ultima_verificare) : 'Neverificată'}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <Button asChild size="sm" variant="ghost">
+                                        <Link
+                                          to={`/cauta-taxe?q=${encodeURIComponent(l.nume)}`}
+                                          aria-label={`Caută taxe în ${l.nume}`}
+                                        >
+                                          <Search className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                                          Caută taxe
+                                        </Link>
+                                      </Button>
+                                      <Button asChild size="sm" variant="ghost">
+                                        <Link to={`/localitati/${l.id}`}>Vezi detalii</Link>
+                                      </Button>
+                                      {esteAdmin ? (
+                                        <>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => setDialog({ tip: 'localitate', item: l })}
+                                            aria-label={`Editează ${l.nume}`}
+                                          >
+                                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => setDialog({ tip: 'zona', localitateId: l.id })}
+                                            aria-label={`Adaugă zonă pentru ${l.nume}`}
+                                          >
+                                            <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => setDialog({ tip: 'regula', localitateId: l.id })}
+                                            aria-label={`Adaugă regulă pentru ${l.nume}`}
+                                          >
+                                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => setDialog({ tip: 'sursa', localitateId: l.id })}
+                                            aria-label={`Adaugă document pentru ${l.nume}`}
+                                          >
+                                            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                                          </Button>
+                                          {!l.archived ? (
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              onClick={() => setDeArhivat(l)}
+                                              aria-label={`Arhivează ${l.nume}`}
+                                            >
+                                              <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                                            </Button>
+                                          ) : null}
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })}
               </div>
 
               {areMaiMulte ? (
